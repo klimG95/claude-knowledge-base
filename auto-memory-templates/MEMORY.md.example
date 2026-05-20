@@ -1,0 +1,15 @@
+<!--
+Это шаблон индекса auto-memory. Чтобы активировать:
+1. Скопируйте этот файл в `~/.claude/projects/<encoded-install-path>/memory/` (Windows: `%USERPROFILE%\.claude\projects\...\memory\`).
+2. Уберите суффикс `.example` из имени — должно остаться `MEMORY.md`.
+3. Удалите этот HTML-комментарий целиком.
+4. Замените placeholder-строки ниже на реальные ссылки на свои memory-файлы.
+5. Сохраните только те строки, для которых вы реально создали файлы.
+-->
+
+- [User language](user_language.md) — <язык общения; для краткости: «на русском, техтермины на английском»>
+- [User role](user_role.md) — <уровень технических знаний пользователя и что это значит для тона>
+- [Technical autonomy](feedback_technical_autonomy.md) — все технические выборы беру сам без вопросов; пользователь даёт только цели
+- [Confirm before mutations](feedback_confirm_before_mutations.md) — стандартные mutation в рамках задачи без подтверждения; спрашивать только при выходе за scope
+- [Project <name> context](project_<slug>_context.md) — указатель в vault [[<slug>]] MOC; локальный путь к коду + GitHub-url + ключевые факты для быстрого доступа
+- [Obsidian second brain](project_obsidian_second_brain.md) — vault в `obsidian-aura/`; raw/+wiki/+AGENTS.md+index.md+CHANGELOG.md+journal/; правила обработки в AGENTS.md
