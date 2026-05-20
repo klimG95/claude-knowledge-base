@@ -5,7 +5,8 @@
 - **Claude Code CLI** (или совместимый агент с поддержкой `AGENTS.md` / `CLAUDE.md`). Проверка: `claude --version`.
 - **Obsidian** — для визуализации vault'а и graph-view. Опц.: vault работает и без Obsidian (markdown + frontmatter — стандарт). Скачать: [obsidian.md](https://obsidian.md).
 - **Git** — для clone и последующих `git pull` обновлений методологии. Проверка: `git --version`.
-- **PowerShell 5.1+** (Windows, входит в систему) или **bash** (macOS/Linux).
+- **PowerShell 5.1+** (Windows, входит в систему) — для `install.ps1`.
+- **bash** (macOS/Linux) — для `install.sh`.
 - **Administrator-права** (Windows) — нужны только для создания symlink через `mklink`. Если их нет — installer автоматически переключится на copy-fallback (см. ниже).
 
 ## Шаги
@@ -25,6 +26,8 @@ cd <install-dir>
 .\install.ps1 -InstallDir .
 # или конкретный путь:
 .\install.ps1 -InstallDir "C:\path\to\install"
+# с авто-копированием auto-memory шаблонов:
+.\install.ps1 -InstallDir . -CopyMemory
 ```
 
 Параметры:
@@ -34,6 +37,7 @@ cd <install-dir>
 | `-InstallDir <path>` | Где разворачивать. По умолчанию — `.` |
 | `-Force` | Перезаписать существующий symlink/копию `AGENTS.md` без вопросов |
 | `-SkipSymlink` | Не создавать symlink (полезно для тестов) |
+| `-CopyMemory` | Авто-копирование `.example`-шаблонов в encoded auto-memory путь |
 | `-Verbose` | Подробный вывод |
 
 Что делает installer:
@@ -44,14 +48,22 @@ cd <install-dir>
 4. Ищет Obsidian на диске — для подсказки, где открыть vault.
 5. Опц. предлагает скопировать `.example`-шаблоны auto-memory в `~/.claude/projects/.../memory/`.
 
-### 3. Установка (macOS/Linux, manual)
-
-Скрипта под bash в пакете нет (см. issue #1 если нужен). Manual вариант:
+### 3. Установка (macOS/Linux)
 
 ```bash
-cd <install-dir>
-ln -s obsidian-aura/AGENTS.md AGENTS.md
+chmod +x install.sh
+./install.sh --install-dir . --copy-memory
 ```
+
+Параметры (функциональный паритет с `install.ps1`):
+
+| Параметр | Назначение |
+|----------|------------|
+| `--install-dir <path>` | Где разворачивать. По умолчанию — `.` |
+| `--force` | Перезаписать существующий symlink/копию `AGENTS.md` без вопросов |
+| `--skip-symlink` | Не создавать symlink (полезно для тестов) |
+| `--copy-memory` | Авто-копирование `.example`-шаблонов в encoded auto-memory путь |
+| `--verbose` | Подробный вывод |
 
 Дальше шаги идентичны Windows-варианту.
 
@@ -66,18 +78,13 @@ Vault использует Dataview для динамических индекс
 
 После активации в `methodology-overview.md` и MOC-страницах появятся живые таблицы.
 
-### 5. Auto-memory (опционально)
+### 5. Auto-memory (если не было `--copy-memory`)
 
-Auto-memory — persistent layer памяти Claude между сессиями. Хранится в `~/.claude/projects/c--<encoded-cwd>/memory/MEMORY.md`. `<encoded-cwd>` — путь к проекту, где `\` и `:` заменены на `-`.
+Если ты пропустил флаг автоматического копирования при installation, скопируй вручную:
 
-Чтобы Claude помнил твои preferences (язык общения, уровень технического разговора, степень автономности агента):
-
-1. Скопируй нужные `.example`-файлы из `auto-memory-templates/` в свой memory-каталог.
-2. Убери суффикс `.example`.
-3. Отредактируй под себя.
-4. Добавь указатели в `MEMORY.md` (формат описан в `auto-memory-templates/README.md`).
-
-Полный гайд — `auto-memory-templates/README.md`.
+- Запусти инсталлер ещё раз с флагом `--copy-memory` / `-CopyMemory`.
+- Или сам: путь генерируется как `~/.claude/projects/c--<encoded-install-path>/memory/`. Encoded-path = lowercase install-path с заменой `\`, `/`, `:` на `-` (для Windows — с префиксом `c--` после drive letter).
+- Полные правила формата — в `auto-memory-templates/README.md`.
 
 ### 6. Первая сессия Claude
 
@@ -128,5 +135,6 @@ Claude задаст 4 вопроса (язык общения, имя/scope пр
 - **`mklink` требует Administrator** — запусти PowerShell от админа (`Run as Administrator`) и повтори, либо используй `install.ps1` без admin — он сам переключится на copy-fallback (с предупреждением: при обновлении конституции придётся синхронизировать вручную).
 - **Dataview не активирован** — индексы пустые. Включи плагин (шаг 4).
 - **Auto-memory не подгружается** — проверь, что путь к memory соответствует CWD проекта (encoded `\` → `-`, `:` → `-`).
+- **Auto-memory путь сгенерировался неправильно** — задать вручную через `-InstallDir <path>` (PowerShell) или `--install-dir <path>` (bash) при повторном запуске инсталлера с `-CopyMemory` / `--copy-memory`.
 - **Claude не видит AGENTS.md** — проверь, что symlink/копия в корне install-dir, а не в `obsidian-aura/`.
 - **`git pull` ругается на изменённые файлы** — методология обновлена, локальные правки в шаблонах конфликтуют. Создай свою ветку или используй `git stash`.

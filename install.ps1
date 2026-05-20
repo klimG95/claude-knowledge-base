@@ -4,29 +4,35 @@
 
 .DESCRIPTION
     Создаёт symlink AGENTS.md в корне install-dir, проверяет окружение
-    (git, Obsidian), опционально предлагает развернуть auto-memory templates.
+    (git, Obsidian), опционально разворачивает auto-memory templates в
+    %USERPROFILE%\.claude\projects\<encoded-install-path>\memory\.
 
 .PARAMETER InstallDir
     Путь, где разворачивать пакет. По умолчанию — текущая директория.
 
 .PARAMETER Force
-    Перезаписать существующий AGENTS.md без подтверждения.
+    Перезаписать существующий AGENTS.md / auto-memory без подтверждения.
 
 .PARAMETER SkipSymlink
     Не создавать symlink (полезно для тестов / CI).
+
+.PARAMETER CopyMemory
+    Автоматически скопировать auto-memory шаблоны без интерактивного prompt'а.
+    Без флага — installer спросит (default: No).
 
 .EXAMPLE
     .\install.ps1 -InstallDir .
 
 .EXAMPLE
-    .\install.ps1 -InstallDir "C:\projects\kb" -Force
+    .\install.ps1 -InstallDir "C:\projects\kb" -Force -CopyMemory
 #>
 
 [CmdletBinding()]
 param(
     [string]$InstallDir = ".",
     [switch]$Force,
-    [switch]$SkipSymlink
+    [switch]$SkipSymlink,
+    [switch]$CopyMemory
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,6 +48,51 @@ function Test-Administrator {
     $current = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($current)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Ask-YesNo {
+    <#
+    .SYNOPSIS
+        Интерактивный prompt с default. В non-interactive mode возвращает default.
+    #>
+    param(
+        [Parameter(Mandatory=$true)][string]$Question,
+        [bool]$Default = $false
+    )
+    # Non-interactive (CI, piped input) — берём default
+    if ([Console]::IsInputRedirected -or -not [Environment]::UserInteractive) {
+        return $Default
+    }
+    $defaultText = if ($Default) { 'Y/n' } else { 'y/N' }
+    $response = Read-Host "$Question [$defaultText]"
+    if ([string]::IsNullOrWhiteSpace($response)) { return $Default }
+    return $response -match '^[Yy]'
+}
+
+function Get-ClaudeMemoryDir {
+    <#
+    .SYNOPSIS
+        Вычисляет encoded путь auto-memory для install-dir.
+    .DESCRIPTION
+        Правило (matches Claude Code CLI):
+          - Windows "C:\foo\bar"  -> "c--foo-bar" (drive letter lowercased)
+          - POSIX-style fallback  -> "-foo-bar"
+        Возвращает %USERPROFILE%\.claude\projects\<encoded>\memory.
+    #>
+    param([Parameter(Mandatory=$true)][string]$InstallDir)
+    $abs = (Resolve-Path -Path $InstallDir).Path
+    if ($abs -match '^([A-Za-z]):(.*)$') {
+        $drive = $Matches[1].ToLower()
+        $afterDrive = $Matches[2]
+        # Replace \ and / with - ; strip leading dash
+        $rest = $afterDrive -replace '\\','-' -replace '/','-'
+        $rest = $rest.TrimStart('-')
+        $encoded = "$drive--$rest"
+    } else {
+        # POSIX-style fallback (нечасто на Windows, но возможно)
+        $encoded = $abs -replace '/','-'
+    }
+    return Join-Path $env:USERPROFILE ".claude\projects\$encoded\memory"
 }
 
 # --- Resolve install dir -----------------------------------------------------
@@ -144,20 +195,22 @@ if ($obsidianCandidates.Count -gt 0) {
     Write-Info "Скачать: https://obsidian.md"
 }
 
-# --- Auto-memory prompt ------------------------------------------------------
+# --- Auto-memory automation --------------------------------------------------
 
 $autoMemSrc = Join-Path $InstallDir "auto-memory-templates"
-if (Test-Path $autoMemSrc) {
+if (-not (Test-Path $autoMemSrc)) {
+    Write-Warn2 "Папка auto-memory-templates отсутствует — этот шаг пропущен."
+} else {
     Write-Host ""
-    $answer = Read-Host "Скопировать auto-memory шаблоны в ~/.claude/projects/.../memory/? [y/N]"
-    if ($answer -match '^(y|Y|yes|YES)$') {
-        $encoded = ($InstallDir -replace '[:\\]', '-')
-        # Убираем ведущие минусы
-        $encoded = $encoded.TrimStart('-')
-        $defaultMemDir = Join-Path $env:USERPROFILE ".claude\projects\c--$encoded\memory"
-        Write-Info "Default путь: $defaultMemDir"
-        $memDir = Read-Host "Путь к memory-каталогу (Enter — default)"
-        if ([string]::IsNullOrWhiteSpace($memDir)) { $memDir = $defaultMemDir }
+    $doCopy = if ($CopyMemory) {
+        $true
+    } else {
+        Ask-YesNo -Question "Скопировать auto-memory шаблоны в ~/.claude/projects/.../memory/?" -Default $false
+    }
+
+    if ($doCopy) {
+        $memDir = Get-ClaudeMemoryDir -InstallDir $InstallDir
+        Write-Info "Auto-memory target: $memDir"
 
         if (-not (Test-Path $memDir)) {
             try {
@@ -171,26 +224,26 @@ if (Test-Path $autoMemSrc) {
 
         if ($memDir) {
             $examples = Get-ChildItem -Path $autoMemSrc -Filter "*.example" -File -ErrorAction SilentlyContinue
-            if ($examples.Count -eq 0) {
+            if (-not $examples -or $examples.Count -eq 0) {
                 Write-Warn2 "В auto-memory-templates не найдено .example-файлов"
-            }
-            foreach ($ex in $examples) {
-                $destName = $ex.Name -replace '\.example$',''
-                $destPath = Join-Path $memDir $destName
-                if ((Test-Path $destPath) -and -not $Force) {
-                    Write-Warn2 "  Пропуск $destName — уже существует (используй -Force для перезаписи)"
-                    continue
+            } else {
+                foreach ($ex in $examples) {
+                    $destName = $ex.Name -replace '\.example$',''
+                    $destPath = Join-Path $memDir $destName
+                    if ((Test-Path $destPath) -and -not $Force) {
+                        Write-Warn2 "  Уже существует, пропускаю: $destName (используй -Force для перезаписи)"
+                        continue
+                    }
+                    Copy-Item -Path $ex.FullName -Destination $destPath -Force
+                    Write-OK "  Скопирован: $($ex.Name) -> $destPath"
                 }
-                Copy-Item -Path $ex.FullName -Destination $destPath -Force
-                Write-OK "  Скопирован $destName"
+                Write-Info "Auto-memory скопированы. Открой и кастомизируй под себя."
+                Write-Info "Гайд по содержимому — auto-memory-templates\README.md."
             }
-            Write-Info "Отредактируй файлы под себя. См. auto-memory-templates\README.md."
         }
     } else {
-        Write-Info "Auto-memory пропущен. Можно сделать вручную позже."
+        Write-Info "Auto-memory пропущен. Можно сделать вручную позже (см. INSTALL.md шаг 5)."
     }
-} else {
-    Write-Warn2 "Папка auto-memory-templates отсутствует — этот шаг пропущен."
 }
 
 # --- Final report ------------------------------------------------------------
