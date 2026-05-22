@@ -16,6 +16,50 @@ updated: 2026-05-22
 
 ---
 
+## Incident 2026-05-22 (раунд 7) — Analytics P1 Calendar + P2 Logs + P2 e2e: финиш unblock
+
+**Status:** resolved — все 6 приоритетов unblock закрыты.
+**Severity:** S2 (UX deception — календарь молча пустой; defensive — лог-конкуренция; preventive — отсутствие e2e smoke)
+
+### Symptom
+
+После P0 (раунд 5) + P1 M15 (раунд 6) остались три неисправленных пункта из assessment'а раунда 4:
+1. **Calendar** — `mt5.calendar_event_by_currency` отсутствует в установленной MetaTrader5 → 25180 AttributeError × 10 часов, виджет календаря пуст без объяснения.
+2. **Лог-конкуренция** — 6368 WinError 32 при ротации `bot.log`.
+3. **Integration smoke gap** — unit-тесты зелёные, прод не работает (классический gap, не было e2e через WS).
+
+### Resolution
+
+**P1 Calendar:**
+- `EconomicCalendar` принимает `csv_fallback_path`. `refresh()` сначала проверяет `hasattr(mt5, "calendar_*")` — если нет, сразу `[]` (нет 25k AttributeError). При пустом MT5 → CSV fallback c фильтрами window/currencies/min_importance. `last_source ∈ {mt5, csv, none}`.
+- Default `bot/analytics/data/economic_calendar.csv` положен в дистрибутив (5 примеров событий, формат ForexFactory).
+- Manager wiring: `cal_cfg.csv_fallback_path` resolve'ится к bundled CSV если null.
+- Snapshot `system_status.calendar_source` публикуется. UI: жёлтый Alert при CSV, оранжевый при none.
+
+**P2 Лог-конкуренция:**
+- `_JSONRotatingHandler.emit` ловит `PermissionError`/`OSError` от `doRollover` → `rolloverAt += 3600`, продолжаем писать. Запись не теряется. (Базовый кейс bot.log vs analytics.log уже был решён `log_name="analytics"` в раунде A.4 — раздельные файлы; защита остаётся для antivirus/tail-индексаторов.)
+
+**P2 Integration smoke e2e:**
+- `tests/analytics/test_manager_smoke.py::test_manager_e2e_indicators_nonempty` — fixture `mt5_online` с валидным symbol_info + copy_rates_from_pos (60 баров). Тест поднимает manager, шлёт `analytics.get_snapshot` через WS, asserts `system_status.symbol_resolved=True`, `indicators.atr_primary/atr_m15/atr_h1 != None`.
+
+**Попутно (feedback_fix_found_bugs):**
+- `snapshot_builder.snapshot_buf` использовал несуществующие `buf.size()` / `buf.snapshot()` — pre-existing bug ломал snapshot_loop при `levels.enabled=True` с непустыми буферами. Online-mock e2e сразу высветил. Заменил на `len(buf)` / `buf.get_df()`. Без этого фикса всё остальное unblock не работало бы end-to-end.
+
+Тесты: pytest 1157/1157, vitest 24/24, tsc чисто. Journal: [[2026-05-22-analytics-p1-calendar-and-finish]].
+
+### Prevention
+
+- **`hasattr` guard перед циклом** для опциональных API внешней библиотеки. Try/except внутри for-loop не защищает от шума в логе (вызов всё равно происходит N раз). Pattern: `if not hasattr(mt5, "foo"): log_warning(...); return []` сверху.
+- **Online-mock e2e — обязателен для модулей, зависящих от внешнего API.** Это последний рубеж между unit-зелёным и прод-сломанным. Стандарт: mock MT5 (или другой API) с валидным минимумом данных → проверка двух-трёх ключевых полей snapshot/response через настоящий WS.
+- **Defensive logging на ротацию.** PermissionError на `doRollover` — типичный Windows-кейс. Skip-rollover-and-retry лучше чем потеря записи.
+- **System_status — стандартное место degraded-status.** Все P0/P1/P2 fix'ы сошлись на одном паттерне: добавить ключ в `snapshot.system_status` + Alert в UI. Будущие источники данных пойдут так же.
+
+### Commits
+
+В рамках сессии (см. git log).
+
+---
+
 ## Incident 2026-05-22 (раунд 6) — Analytics P1: M15 buffer + atr_m15 → DeploymentTable
 
 **Status:** resolved (бэк + тесты, UI не требует правок)

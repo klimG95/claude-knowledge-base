@@ -6,6 +6,23 @@
 
 ## 2026-05-22
 
+### Раунд 7 — Финиш Analytics unblock: P1 Calendar + P2 Logs + P2 e2e smoke
+
+- **P1 Calendar** ([calendar.py](auragrid/python/bot/analytics/calendar.py) + [manager.py](auragrid/python/bot/analytics/manager.py)):
+  - `EconomicCalendar` принимает `csv_fallback_path`; `refresh()` сначала проверяет `hasattr(mt5, "calendar_*")` (anti-25k-AttributeError-pattern), затем MT5, при пустом результате — CSV fallback. `last_source` ∈ {mt5, csv, none}.
+  - Default `bot/analytics/data/economic_calendar.csv` положен в дистрибутив (5 примеров событий, формат ForexFactory).
+  - Manager wiring: cal_cfg.csv_fallback_path → bundled CSV если null.
+  - `analytics_config.yaml`: `calendar.csv_fallback_path: null` с комментарием.
+  - Snapshot: `system_status.calendar_source`.
+  - UI: жёлтый Alert при "csv", оранжевый при "none" (`Analytics/index.tsx` + `useAnalyticsSubscription.ts`).
+- **P2 Лог-конкуренция** ([bot/utils/logging.py:_JSONRotatingHandler](auragrid/python/bot/utils/logging.py)): emit ловит `PermissionError`/`OSError` от `doRollover`, сдвигает `rolloverAt += 3600`, продолжает писать в текущий файл. Запись не теряется.
+- **P2 e2e smoke** ([tests/analytics/test_manager_smoke.py](auragrid/python/tests/analytics/test_manager_smoke.py)): новый fixture `mt5_online` (валидный symbol_info + copy_rates_from_pos 60 баров) + `test_manager_e2e_indicators_nonempty` — поднимает manager, через WS get_snapshot проверяет `symbol_resolved=True` + `indicators.atr_primary/atr_m15/atr_h1 != None`. Закрывает gap «unit зелёные, прод сломан».
+- **Попутно** ([[feedback_fix_found_bugs]]): pre-existing bug в `snapshot_builder.snapshot_buf` — `buf.size()`/`buf.snapshot()` не существуют у RollingBuffer, ломали snapshot_loop при `levels.enabled=True`. Заменил на `len(buf)`/`buf.get_df()`. Online-mock e2e сразу нашёл.
+- **Тесты**: 4 новых для calendar fallback + 1 для rollover-safe + 1 e2e smoke. pytest 1157/1157, vitest 24/24, tsc чисто.
+- **Vault**: [[auragrid-analytics-module]] — корневая причина №2 (calendar) FIXED, «Лог-конкуренция» FIXED, все 6 приоритетов ✅ DONE; TL;DR обновлён. [[auragrid-incidents-log]] — incident раунд 7. Journal — [[2026-05-22-analytics-p1-calendar-and-finish]].
+- **Урок**: «hasattr guard перед циклом» = anti-25k-AttributeError pattern; online-mock e2e обязателен для модулей с внешним API; system_status — стандартное место для degraded-status badge.
+- **Итог 5→6→7**: все 6 приоритетов unblock закрыты за 3 раунда одного дня. Модуль готов к ручной верификации на тестовом MT5-аккаунте.
+
 ### Раунд 6 — Analytics P1: M15 buffer + atr_m15 → DeploymentTable
 
 - **Бэк** ([manager.py](auragrid/python/bot/analytics/manager.py) + [indicator_pipeline.py](auragrid/python/bot/analytics/indicator_pipeline.py)):

@@ -1,6 +1,6 @@
 ---
 type: component
-tags: [auragrid, analytics, second-process, ipc, partially-fixed]
+tags: [auragrid, analytics, second-process, ipc, unblocked]
 component: bot.analytics
 layer: code
 shape: domain-hub
@@ -10,7 +10,7 @@ updated: 2026-05-22
 
 # AuraGrid — Analytics module (состояние и архитектура)
 
-**TL;DR.** Analytics — отдельный python-процесс со своим MT5-инстансом и IPC-портом 8770, который должен снабжать UI 12 виджетами + DeploymentTable (расчёт риска стратегии). На версии HEAD (677811c, релиз 1.0.1) фактически работали только Spread и Sessions, остальное — null'ы. После раундов 5 (P0) и 6 (P1 M15) большая часть pipeline разблокирована: ~~`symbol_not_found` ломает backfill~~ **(P0 пофикшен 2026-05-22)**, ~~M15 buffer отсутствует~~ **(P1 пофикшен 2026-05-22 — backfill + atr_m15 в pipeline → DeploymentTable работает)**. Остаётся **MT5 calendar API mismatch** (`calendar_event_by_currency` отсутствует, календарь всегда пуст — нужен CSV fallback).
+**TL;DR.** Analytics — отдельный python-процесс со своим MT5-инстансом и IPC-портом 8770, который должен снабжать UI 12 виджетами + DeploymentTable (расчёт риска стратегии). На версии HEAD (677811c, релиз 1.0.1) фактически работали только Spread и Sessions, остальное — null'ы. **После раундов 5 (P0 symbol) → 6 (P1 M15) → 7 (P1 Calendar + P2 logs + P2 e2e) — все три корневые причины разблокированы.** Snapshot непустой; UI рисует degraded-status badge при любом fallback (heuristic symbol / CSV calendar / no calendar / mt5 disconnected); ротация логов защищена от PermissionError; integration smoke e2e проверяет `indicators.atr_*` через WebSocket в каждом CI прогоне.
 
 ## Когда читать эту страницу
 
@@ -61,7 +61,7 @@ mt5.initialize() в analytics-процессе
 | Volatility | в `snapshot_builder.build_volatility_block` | Session vol ratio + intraday | ✓ (получает None) |
 | Sessions | `analytics/sessions.py` | UTC-based, не зависит от MT5 | ✓ работает всегда |
 | Spread | `analytics/spread.py` + `snapshot_builder.build_spread_block` | Sample + median 24h + z-score + heatmap | ✓ live tick canal работает |
-| Calendar | `analytics/calendar.py` | MT5 calendar_event_by_currency + CSV fallback | ❌ MT5 API mismatch, fallback не подключён |
+| Calendar | `analytics/calendar.py` | MT5 calendar_event_by_currency + CSV fallback | ✓ (CSV fallback wired + hasattr-guard 2026-05-22) |
 | Levels | `analytics/levels.py` | Pivot/Camarilla/Fib + PDH/PDL + zigzag + fractals + VP | ✓ (нет данных) |
 | Position | `analytics/position.py` | avg_price/breakeven/distance_to_fill/MFE/MAE/cycles | ✓ (нет данных) |
 | Alerts | `analytics/alerts.py` + alert_engine | Rules → fire → persist → publish event | ✓ (нет триггеров без данных) |
@@ -88,11 +88,17 @@ mt5.initialize() в analytics-процессе
 
 Тесты — `tests/analytics/test_mt5_client.py::TestResolveSymbol` (6 кейсов) + `test_manager_symbol_candidates.py` (7 кейсов).
 
-### №2 — MT5 calendar API mismatch (HIGH)
+### №2 — MT5 calendar API mismatch (HIGH — **FIXED 2026-05-22**)
 
 `mt5.calendar_event_by_currency()` отсутствует в установленной версии MetaTrader5 пакета. Try/except в [calendar.py:93-98](auragrid/python/bot/analytics/calendar.py#L93-L98) обработан корректно (нет crash), но возвращается пустой массив. В логе тестировщика 25 180 трейсбэков AttributeError за ~10 часов сессии.
 
 В коде есть `load_csv_fallback` ([calendar.py:266-337](auragrid/python/bot/analytics/calendar.py#L266-L337)) — путь к CSV из конфига, но фактически не подключён или CSV-файл не в дистрибутиве.
+
+**Fix (2026-05-22, journal [[2026-05-22-analytics-p1-calendar-and-finish]]):**
+1. `EconomicCalendar.refresh()` сначала проверяет `hasattr(mt5, "calendar_event_by_currency")` + `hasattr(... "calendar_value_history")` — если функций нет, сразу возвращает [] (не пытается их дёргать → не плодит 25 тысяч AttributeError).
+2. При empty/missing MT5 — автоматически читает `csv_fallback_path` из конфига, фильтрует по window + currencies + min_importance.
+3. Manager резолвит default `bot/analytics/data/economic_calendar.csv` (положен в дистрибутив, шаблон с примерами событий ForexFactory-формата).
+4. Snapshot публикует `system_status.calendar_source: "mt5"|"csv"|"none"`. UI рисует жёлтый Alert при CSV-fallback или оранжевый при `none`.
 
 ### №3 — M15 buffer не реализован (HIGH — **FIXED 2026-05-22**)
 
@@ -128,16 +134,18 @@ UI [Analytics/index.tsx:114](auragrid/desktop/src/pages/Analytics/index.tsx#L114
 | `volatility` | ✗ | зависит от atr_h1/m15 |
 | `levels` | ✗ | без буферов |
 | `position_buy/sell` | ✗ | [snapshot_builder.py:416](auragrid/python/bot/analytics/snapshot_builder.py#L416) — `if ctx is None or symbol is None: return None, None` |
-| `calendar_upcoming` | ✗ | MT5 API mismatch |
+| `calendar_upcoming` | ✓ после P1 Calendar | MT5 missing → CSV fallback; `calendar_source` в `system_status` |
 | `alerts_active` | пусто | правила не триггерятся без данных |
 | DeploymentTable (расчёт риска стратегии) | ✓ после P0+P1 | После 2026-05-22: symbol резолвится → buffers заполняются → atr_m15/h1/d1 ненулевые → кнопка активна |
 | RiskMeter (главный экран) | работает независимо | из бота (`core/risk.py`), не из analytics-процесса |
 
 ## Сопутствующие проблемы
 
-### Лог-конкуренция
+### Лог-конкуренция (**FIXED 2026-05-22**)
 
 Analytics и бот пишут в один `%APPDATA%/GridScalp/logs/bot.log`. При попытке ротации (`doRollover`) — `PermissionError: WinError 32` (файл занят другим процессом). ~6 400 событий в логе тестировщика. Не блокирует функционал, но захламляет stderr.
+
+**Fix (2026-05-22):** `_JSONRotatingHandler.emit` теперь ловит `PermissionError`/`OSError` от `doRollover()`, сдвигает `rolloverAt` на час вперёд и продолжает писать в текущий файл. Запись не теряется. + `log_name="analytics"` уже передавался из manager.main (раунд A.4) — два процесса физически пишут в разные файлы; защита от ротационных race остаётся для случая когда внешний tail/antivirus держит файл.
 
 ### IPC connect refused штук в логе UI
 
@@ -147,12 +155,14 @@ Analytics и бот пишут в один `%APPDATA%/GridScalp/logs/bot.log`. �
 
 В порядке убывания:
 
-1. ~~**P0 — Symbol resolution.**~~ ✅ **DONE (2026-05-22)** — см. секцию №1 fix выше.
-2. ~~**P1 — M15 buffer.**~~ ✅ **DONE (2026-05-22)** — см. секцию №3 fix выше.
-3. **P1 — Calendar fallback.** Подключить `load_csv_fallback` (положить CSV в дистрибутив, или подтянуть из ForexFactory/Investing.com).
-4. **P2 — Сепарация лог-файлов** analytics → `analytics.log`, бот → `bot.log`.
-5. ~~**P2 — Degraded-mode UI badge.**~~ ✅ **DONE (2026-05-22, попутно с P0)** — снапшот публикует `system_status`, UI рисует красный/жёлтый Alert.
-6. **P2 — Integration smoke** e2e-тест (fake-MT5 + manager + builder → snapshot.indicators непустые через 10s).
+1. ~~**P0 — Symbol resolution.**~~ ✅ **DONE (2026-05-22, раунд 5)** — см. секцию №1 fix выше.
+2. ~~**P1 — M15 buffer.**~~ ✅ **DONE (2026-05-22, раунд 6)** — см. секцию №3 fix выше.
+3. ~~**P1 — Calendar fallback.**~~ ✅ **DONE (2026-05-22, раунд 7)** — `load_csv_fallback` подключён через `EconomicCalendar(csv_fallback_path=...)`, hasattr-guard на MT5 API, default CSV в дистрибутиве, `calendar_source` в snapshot+UI.
+4. ~~**P2 — Сепарация лог-файлов.**~~ ✅ **DONE (2026-05-22, раунд 7 попутно)** — log_name="analytics" уже передавался (Wave A.4), `_JSONRotatingHandler.emit` защищён от PermissionError на ротации.
+5. ~~**P2 — Degraded-mode UI badge.**~~ ✅ **DONE (2026-05-22, раунд 5)** — снапшот публикует `system_status`, UI рисует красный/жёлтый/оранжевый Alert (symbol_resolved, symbol_source, calendar_source).
+6. ~~**P2 — Integration smoke.**~~ ✅ **DONE (2026-05-22, раунд 7)** — `tests/analytics/test_manager_smoke.py::test_manager_e2e_indicators_nonempty` (online-MT5 mock + WS get_snapshot → проверка `indicators.atr_primary/atr_m15/atr_h1 != None`).
+
+**Все приоритеты закрыты.** Модуль готов к ручной верификации на тестовом MT5-аккаунте.
 
 ## Связано с
 
