@@ -1,6 +1,6 @@
 ---
 type: component
-tags: [auragrid, analytics, second-process, ipc, broken]
+tags: [auragrid, analytics, second-process, ipc, partially-fixed]
 component: bot.analytics
 layer: code
 shape: domain-hub
@@ -10,7 +10,7 @@ updated: 2026-05-22
 
 # AuraGrid — Analytics module (состояние и архитектура)
 
-**TL;DR.** Analytics — отдельный python-процесс со своим MT5-инстансом и IPC-портом 8770, который должен снабжать UI 12 виджетами + DeploymentTable (расчёт риска стратегии). На версии HEAD (677811c, релиз 1.0.1) фактически работают только Spread и Sessions, остальное — null'ы. Не из-за плохой архитектуры, а из-за трёх каскадных багов: `symbol_not_found` ломает backfill (все буферы пустые → indicators all-None → regime/volatility/levels/position все null), `mt5.calendar_event_by_currency` отсутствует в API (календарь всегда пуст), M15 buffer вообще не реализован в `tfs_to_backfill` (это блокирует DeploymentTable даже когда symbol найдётся).
+**TL;DR.** Analytics — отдельный python-процесс со своим MT5-инстансом и IPC-портом 8770, который должен снабжать UI 12 виджетами + DeploymentTable (расчёт риска стратегии). На версии HEAD (677811c, релиз 1.0.1) фактически работают только Spread и Sessions, остальное — null'ы. Не из-за плохой архитектуры, а из-за трёх каскадных багов: ~~`symbol_not_found` ломает backfill~~ **(P0 пофикшен 2026-05-22 — heuristic + dynamic candidates + UI badge)**, `mt5.calendar_event_by_currency` отсутствует в API (календарь всегда пуст), M15 buffer вообще не реализован в `tfs_to_backfill` (это блокирует DeploymentTable даже когда symbol найдётся).
 
 ## Когда читать эту страницу
 
@@ -73,13 +73,20 @@ mt5.initialize() в analytics-процессе
 
 ## Три корневые причины «не работает»
 
-### №1 — `symbol_not_found` (CRITICAL)
+### №1 — `symbol_not_found` (CRITICAL — **FIXED 2026-05-22**)
 
 [mt5_client.py:124](auragrid/python/bot/analytics/mt5_client.py#L124) — `resolve_symbol` пробует жёсткий список `['XAUUSD', 'XAUUSD.s', 'XAUUSD.m', 'GOLD', 'XAU/USD']`. У тестировщика 2026-05-21 ни один не подошёл. При этом основной бот успешно торговал магиком `20260002` параллельно — значит MT5 работает, но второй процесс получает другие symbols_get() (терминал MT5, ограничения per-connection, или брокер выдаёт несколько имён).
 
 Эффект каскадный: `symbol=None` → `_backfill` skip → buffers empty → indicators all-None → regime/volatility/levels/position all null.
 
 **Лог-сигнатура:** `[warning] symbol_not_found tried=[...]` + `[warning] backfill_skipped_no_symbol`.
+
+**Fix (2026-05-22, journal [[2026-05-22-analytics-p0-symbol-resolution]]):** трёхэшелонная схема резолюции.
+  1. **Dynamic candidates**: `AnalyticsManager._build_symbol_candidates` собирает имена из `analytics_config.yaml` + `mt5.symbol` каждого `<APPDATA>/GridScalp/strategies/*.yaml` + 11 типовых broker-suffix вариантов (`.s/.m/.pro/.c/.i/.raw/.x/x/pro/_i`).
+  2. **Heuristic fallback**: при провале жёсткого списка `resolve_symbol(..., heuristic_tokens=["XAU","USD"])` перебирает `mt5.symbols_get()` и берёт первое имя, содержащее ВСЕ tokens case-insensitively. Закрывает custom-суффиксы (XAUUSDpro, xauusdmicro, etc.).
+  3. **UI degraded badge**: snapshot теперь содержит `system_status: {symbol_resolved, symbol_source, symbol_tried, mt5_connected}`. Окно Analytics рисует красный Alert «символ не найден» с tried-списком и инструкцией, либо жёлтый Alert «найден через эвристику» с рекомендацией добавить имя в config.
+
+Тесты — `tests/analytics/test_mt5_client.py::TestResolveSymbol` (6 кейсов) + `test_manager_symbol_candidates.py` (7 кейсов).
 
 ### №2 — MT5 calendar API mismatch (HIGH)
 
@@ -133,11 +140,11 @@ Analytics и бот пишут в один `%APPDATA%/GridScalp/logs/bot.log`. �
 
 В порядке убывания:
 
-1. **P0 — Symbol resolution.** Расширить candidates (брать `strategy.symbol` из BotConfig + variants). При неудаче — перебор `mt5.symbols_get()` с эвристикой по 'XAU'+'USD'. UI badge `Analytics: символ не найден` вместо тихих прочерков.
+1. ~~**P0 — Symbol resolution.**~~ ✅ **DONE (2026-05-22)** — см. секцию №1 fix выше.
 2. **P1 — M15 buffer.** Добавить M15 в `tfs_to_backfill` + блок в `recompute_indicators` по образцу H1. Это разблокирует DeploymentTable.
 3. **P1 — Calendar fallback.** Подключить `load_csv_fallback` (положить CSV в дистрибутив, или подтянуть из ForexFactory/Investing.com).
 4. **P2 — Сепарация лог-файлов** analytics → `analytics.log`, бот → `bot.log`.
-5. **P2 — Degraded-mode UI badge.** Пользователь должен понимать «не работает — потому что X», а не видеть прочерки.
+5. ~~**P2 — Degraded-mode UI badge.**~~ ✅ **DONE (2026-05-22, попутно с P0)** — снапшот публикует `system_status`, UI рисует красный/жёлтый Alert.
 6. **P2 — Integration smoke** e2e-тест (fake-MT5 + manager + builder → snapshot.indicators непустые через 10s).
 
 ## Связано с

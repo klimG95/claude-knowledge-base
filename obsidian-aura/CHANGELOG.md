@@ -6,6 +6,20 @@
 
 ## 2026-05-22
 
+### Раунд 5 — Analytics P0: Symbol resolution unblock (бэкенд + UI + тесты)
+
+- **Бэк** ([mt5_client.py:107](auragrid/python/bot/analytics/mt5_client.py#L107) + [manager.py](auragrid/python/bot/analytics/manager.py)):
+  - `resolve_symbol(candidates, *, heuristic_tokens=None)` — добавлен heuristic fallback через `mt5.symbols_get()` с поиском имени, содержащего ВСЕ tokens case-insensitively. Source последней резолюции: `candidates`/`heuristic`/`none` пишется в `MT5Client.last_resolve_source`.
+  - `AnalyticsManager._build_symbol_candidates` — динамическая сборка: base из `analytics_config.yaml` + `mt5.symbol` из каждого `<APPDATA>/GridScalp/strategies/*.yaml` + 11 типовых broker-suffix вариантов (`.s/.m/.pro/.c/.i/.raw/.x/x/pro/_i`). Дубли удаляются с сохранением порядка.
+  - `analytics_config.yaml` — новый ключ `system.symbol_heuristic_tokens: [XAU, USD]`.
+  - В `start()` и `_mt5_health_loop()` (reconnect path) вызов `resolve_symbol` передаёт `heuristic_tokens` + обновляет `manager.symbol_resolved/symbol_source`.
+- **Snapshot** ([snapshot_builder.py](auragrid/python/bot/analytics/snapshot_builder.py)): добавлен блок `system_status: {symbol_resolved, symbol_source, symbol_tried, mt5_connected}`.
+- **UI** ([Analytics/index.tsx](auragrid/desktop/src/pages/Analytics/index.tsx) + `useAnalyticsSubscription.ts`): два Alert-баннера — красный «символ не найден» (tried-список + инструкция) и жёлтый «найден через эвристику» (рекомендация дополнить config). Тип `SystemStatus` экспортирован из хука.
+- **Тесты**: `tests/analytics/test_mt5_client.py::TestResolveSymbol` (6 кейсов) + `tests/analytics/test_manager_symbol_candidates.py` (7 кейсов). pytest 1147/1147 + vitest 24/24 + tsc чисто.
+- **Попутно** ([[feedback_fix_found_bugs]]): добавлен `aiogram>=3.13` в `python/requirements-dev.txt` (pre-existing collection error в admin_bot integration tests, 16/16 после фикса); установлен pnpm + dependencies (TS ошибки `@tauri-apps/plugin-dialog` устранены).
+- **Vault**: [[auragrid-analytics-module]] — TL;DR помечает P0 как fixed, fix-секция в №1 root cause, чек-листы P0/P2-badge помечены ✅ DONE. [[auragrid-incidents-log]] — incident 2026-05-22 раунд 5. Journal — [[2026-05-22-analytics-p0-symbol-resolution]].
+- **Урок**: «hard-coded list + heuristic + UI degraded badge» — переиспользуемый паттерн для broker-specific конфигов. Snapshot `system_status` — точка расширения для P1/P2.
+
 ### Раунд 4 — комплексная оценка модуля Analytics + расчёт риска стратегии (без правок)
 
 - Пользователь сообщил: окно Analytics + DeploymentTable не работают в HEAD `677811c` (релиз 1.0.1) — показываются только Spread + Sessions, остальное прочерки. Запрошена комплексная оценка для дальнейшего unblock'а.

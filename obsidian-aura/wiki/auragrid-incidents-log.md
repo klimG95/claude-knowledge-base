@@ -16,6 +16,43 @@ updated: 2026-05-22
 
 ---
 
+## Incident 2026-05-22 (раунд 5) — Analytics P0: Symbol resolution unblock
+
+**Status:** resolved (бэк + UI + тесты)
+**Severity:** S2 (UX deception — окно работало частично без объяснения причины)
+
+### Symptom
+
+На релизе 1.0.1 окно Analytics показывало только Spread + Sessions, остальные 10 секций — null/прочерки. Из assessment-раунда 4 ([[2026-05-22-analytics-assessment]]) — корневая причина: `symbol_not_found` в analytics-процессе. Жёсткий список `['XAUUSD','XAUUSD.s','XAUUSD.m','GOLD','XAU/USD']` не закрывал custom-суффиксы брокеров.
+
+### Investigation
+
+См. assessment-раунд 4. В этой сессии работа была чисто implementation — pre-known root cause.
+
+### Resolution
+
+Трёхэшелонная схема в analytics-процессе:
+1. **Dynamic candidates** в `AnalyticsManager._build_symbol_candidates`: base (config) + `mt5.symbol` per-strategy yaml + 11 suffix-вариантов (`.s/.m/.pro/.c/.i/.raw/.x/x/pro/_i`).
+2. **Heuristic fallback** в `MT5Client.resolve_symbol(..., heuristic_tokens=["XAU","USD"])`: перебор `mt5.symbols_get()` с поиском имени, содержащего все tokens.
+3. **UI degraded badge**: snapshot публикует `system_status: {symbol_resolved, symbol_source, symbol_tried, mt5_connected}`. Окно рисует красный (`not found`) или жёлтый (`heuristic`) Alert.
+
+Тесты: 6 кейсов на `resolve_symbol`, 7 — на `_build_symbol_candidates`. Полный pytest 1147/1147 + vitest 24/24 + tsc чисто.
+
+Журнал: [[2026-05-22-analytics-p0-symbol-resolution]]. Деталь Fix-секции — в [[auragrid-analytics-module]] корневая причина №1.
+
+### Prevention
+
+- **«Hard-coded list + heuristic» — стандартный паттерн.** Применим там, где данные приходят от внешней системы с broker-specific вариациями (символы, ретеркоды, server names).
+- **Symbol candidates — это data, не code.** В коде только heuristic-семантика; список имён живёт в `analytics_config.yaml` + per-strategy yaml. Онбординг нового брокера — отредактировал конфиг → перезапуск, без новой сборки.
+- **UI degraded-status вместо тихих null'ов.** Любой системный сбой, который ломает UX «по эффекту» (прочерки, disabled-кнопки), должен иметь объясняющий badge с tried/source/инструкцией. Snapshot `system_status` — точка расширения для P1/P2 unblock'ов.
+- **Попутный фикс окружения** ([[feedback_fix_found_bugs]]): aiogram добавлен в `python/requirements-dev.txt`, pnpm-зависимости установлены. Чтобы будущие dev-сессии не натыкались на ту же проблему.
+
+### Commits
+
+В рамках сессии (см. git log).
+
+---
+
 ## Incident 2026-05-22 — Тестировщик (ключ `6b03bdc5-…`) выявил пять проблем после релизного фикс-пакета
 
 **Status:** resolved (коммиты `85b7c91` + `677811c`)
