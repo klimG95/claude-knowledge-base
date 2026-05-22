@@ -6,6 +6,13 @@
 
 ## 2026-05-22
 
+### 🚩 Большой чекпоинт — «Analytics unblocked» (baseline для отката)
+
+- Создана wiki [[auragrid-checkpoint-2026-05-22-analytics-unblocked]] с полным описанием состояния и инструкцией rollback.
+- Git tags `checkpoint/2026-05-22-analytics-unblocked` поставлены в `klimG95/auragrid` (на `6e39ca8`) и `klimG95/claude-knowledge-base` (на `730e51b`).
+- Это первый стабильный baseline после серии релизных фиксов (раунды 1-3) и полного analytics unblock (раунды 5-7). На него возвращаемся, если новые изменения создадут регрессию, которая не чинится быстро.
+- Состояние модулей, тестов, и known limitations — в самой checkpoint-странице.
+
 ### Раунд 7 — Финиш Analytics unblock: P1 Calendar + P2 Logs + P2 e2e smoke
 
 - **P1 Calendar** ([calendar.py](auragrid/python/bot/analytics/calendar.py) + [manager.py](auragrid/python/bot/analytics/manager.py)):

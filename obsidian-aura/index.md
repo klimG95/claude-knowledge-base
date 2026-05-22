@@ -32,6 +32,7 @@
 
 - [[auragrid-incidents-log]] — журнал инцидентов проекта
 - [[auragrid-log-analysis]] — методология анализа логов desktop.log / bot.log
+- [[auragrid-checkpoint-2026-05-22-analytics-unblocked]] — **большой чекпоинт** для отката, первый стабильный вариант за долгое время
 
 ## Источники
 
