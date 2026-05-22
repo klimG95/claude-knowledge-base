@@ -16,6 +16,39 @@ updated: 2026-05-22
 
 ---
 
+## Incident 2026-05-22 (раунд 6) — Analytics P1: M15 buffer + atr_m15 → DeploymentTable
+
+**Status:** resolved (бэк + тесты, UI не требует правок)
+**Severity:** S2 (catastrophically заниженная оценка риска в DeploymentTable — ATR=0)
+
+### Symptom
+
+После P0-фикса (раунд 5) symbol резолвится, snapshot не пустой, но кнопка DeploymentTable оставалась с риском ≈ 0 — `deployInputs.atr_m15 ?? 0` падал на 0, потому что `atr_m15 = None` (нет M15 buffer). Эффект: pre-trade оценка max-loss за час показывала катастрофически малые цифры.
+
+### Resolution
+
+Двухстрочный fix:
+1. `Timeframe.M15` добавлен в `tfs_to_backfill` ([manager.py](auragrid/python/bot/analytics/manager.py)) — buffer заполняется на старте, buffer_sizes.M15=2880 (≈30 дней).
+2. После H1-блока в `recompute_indicators` ([indicator_pipeline.py](auragrid/python/bot/analytics/indicator_pipeline.py)) добавлен M15-блок: `compute_atr(df, n=14)` при `len(m15_buf) >= 14`.
+
+UI/snapshot_builder/levels/preset_eval — ничего не правится. Все потребители уже корректно читали `m._last_indicators.get("atr_m15")` и `snapshot_buf(Timeframe.M15)`, ждали только источник данных.
+
+Тесты: 3 кейса в `TestIndicatorPipeline` (warm/short/missing) + новый `test_manager_backfill_m15.py` (M15 в запросах backfill). pytest 1151/1151.
+
+Журнал: [[2026-05-22-analytics-p1-m15-buffer]]. Деталь fix-секции — в [[auragrid-analytics-module]] корневая причина №3.
+
+### Prevention
+
+- **Schema-first архитектура окупается на расширениях.** `atr_m15` был объявлен в `empty_indicators()` и корректно потреблялся четырьмя модулями ДО реализации источника. Поэтому fix был 5-строчным — не пришлось менять контракты. **Лучшая практика для будущих TF / индикаторов:** сначала добавляй ключ в schema + потребителей с `?? None`/`?? 0`, потом — источник.
+- **Backfill ≠ live update.** В analytics-процессе bar_close_loop детектит close только primary TF. H1/D1/M15 буферы — снимок на старте, stale через несколько часов. Не блокирует UX, но при долгих uptimes ATR M15 устаревает. Future scope: bar_close detection для всех refTF.
+- **Тестировать TF-блоки в pipeline по шаблону 3 кейсов.** `warm` (буфер ≥ N), `short` (буфер < N), `missing` (буфер отсутствует) — стандарт для проверки независимости блоков. Применять для H4, W1 и future-индикаторов.
+
+### Commits
+
+В рамках сессии (см. git log).
+
+---
+
 ## Incident 2026-05-22 (раунд 5) — Analytics P0: Symbol resolution unblock
 
 **Status:** resolved (бэк + UI + тесты)

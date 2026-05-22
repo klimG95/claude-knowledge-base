@@ -6,6 +6,16 @@
 
 ## 2026-05-22
 
+### Раунд 6 — Analytics P1: M15 buffer + atr_m15 → DeploymentTable
+
+- **Бэк** ([manager.py](auragrid/python/bot/analytics/manager.py) + [indicator_pipeline.py](auragrid/python/bot/analytics/indicator_pipeline.py)):
+  - `tfs_to_backfill` теперь включает `Timeframe.M15` — buffer заполняется на старте (buffer_sizes.M15 = 2880, ~30 дней).
+  - В `recompute_indicators` после H1-блока добавлен M15-блок: `compute_atr(df, n=14)` при `len(m15_buf) >= 14`. Минимально — atr_m15 единственный потребитель из schema.
+- **UI/snapshot/levels/preset_eval** — без правок. Все потребители уже корректно читали atr_m15 / snapshot_buf(M15), ждали только источник данных. После P1 кнопка DeploymentTable активируется автоматически.
+- **Тесты**: 3 новых кейса `TestIndicatorPipeline` (warm/short/missing) + новый файл `tests/analytics/test_manager_backfill_m15.py` (M15 в запросах backfill). pytest 1151/1151.
+- **Vault**: [[auragrid-analytics-module]] — корневая причина №3 помечена FIXED, P1-M15 ✅ DONE в Приоритетах, TL;DR и component-таблица обновлены. [[auragrid-incidents-log]] — incident раунд 6. Journal — [[2026-05-22-analytics-p1-m15-buffer]].
+- **Урок**: schema-first архитектура (atr_m15 был в schema + потребителях ДО источника) → fix 5-строчный без правки контрактов. Применять для будущих TF и индикаторов.
+
 ### Раунд 5 — Analytics P0: Symbol resolution unblock (бэкенд + UI + тесты)
 
 - **Бэк** ([mt5_client.py:107](auragrid/python/bot/analytics/mt5_client.py#L107) + [manager.py](auragrid/python/bot/analytics/manager.py)):

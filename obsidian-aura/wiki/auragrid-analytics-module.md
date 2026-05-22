@@ -10,7 +10,7 @@ updated: 2026-05-22
 
 # AuraGrid — Analytics module (состояние и архитектура)
 
-**TL;DR.** Analytics — отдельный python-процесс со своим MT5-инстансом и IPC-портом 8770, который должен снабжать UI 12 виджетами + DeploymentTable (расчёт риска стратегии). На версии HEAD (677811c, релиз 1.0.1) фактически работают только Spread и Sessions, остальное — null'ы. Не из-за плохой архитектуры, а из-за трёх каскадных багов: ~~`symbol_not_found` ломает backfill~~ **(P0 пофикшен 2026-05-22 — heuristic + dynamic candidates + UI badge)**, `mt5.calendar_event_by_currency` отсутствует в API (календарь всегда пуст), M15 buffer вообще не реализован в `tfs_to_backfill` (это блокирует DeploymentTable даже когда symbol найдётся).
+**TL;DR.** Analytics — отдельный python-процесс со своим MT5-инстансом и IPC-портом 8770, который должен снабжать UI 12 виджетами + DeploymentTable (расчёт риска стратегии). На версии HEAD (677811c, релиз 1.0.1) фактически работали только Spread и Sessions, остальное — null'ы. После раундов 5 (P0) и 6 (P1 M15) большая часть pipeline разблокирована: ~~`symbol_not_found` ломает backfill~~ **(P0 пофикшен 2026-05-22)**, ~~M15 buffer отсутствует~~ **(P1 пофикшен 2026-05-22 — backfill + atr_m15 в pipeline → DeploymentTable работает)**. Остаётся **MT5 calendar API mismatch** (`calendar_event_by_currency` отсутствует, календарь всегда пуст — нужен CSV fallback).
 
 ## Когда читать эту страницу
 
@@ -52,11 +52,11 @@ mt5.initialize() в analytics-процессе
 
 | Подмодуль | Файлы | Что делает | Статус |
 |-----------|-------|-----------|--------|
-| Manager | `analytics/manager.py` | Entry-point, lifecycle, backfill, loops | ⚠ M15 missing |
-| MT5 client | `analytics/mt5_client.py` | Свой коннект, resolve_symbol, lock() | ⚠ узкий список candidates |
+| Manager | `analytics/manager.py` | Entry-point, lifecycle, backfill, loops | ✓ (M15 added 2026-05-22) |
+| MT5 client | `analytics/mt5_client.py` | Свой коннект, resolve_symbol, lock() | ✓ (heuristic + dynamic candidates added 2026-05-22) |
 | Fetcher | `analytics/fetcher.py` | backfill native TF + bar_close detection | ✓ |
 | Buffer | `analytics/buffer.py` | Rolling buffer на TF, thread-safe | ✓ |
-| Indicators | `analytics/indicators/*.py` + `indicator_pipeline.py` | ATR/ADX/Bollinger/Choppiness/Hurst/Parkinson/GK/RV + percentiles + intraday profile | ⚠ M15 блок отсутствует |
+| Indicators | `analytics/indicators/*.py` + `indicator_pipeline.py` | ATR/ADX/Bollinger/Choppiness/Hurst/Parkinson/GK/RV + percentiles + intraday profile | ✓ (M15 block added 2026-05-22) |
 | Regime | `analytics/regime.py` | Trend/range/squeeze classify + hysteresis stabilizer | ✓ (получает None) |
 | Volatility | в `snapshot_builder.build_volatility_block` | Session vol ratio + intraday | ✓ (получает None) |
 | Sessions | `analytics/sessions.py` | UTC-based, не зависит от MT5 | ✓ работает всегда |
@@ -94,7 +94,7 @@ mt5.initialize() в analytics-процессе
 
 В коде есть `load_csv_fallback` ([calendar.py:266-337](auragrid/python/bot/analytics/calendar.py#L266-L337)) — путь к CSV из конфига, но фактически не подключён или CSV-файл не в дистрибутиве.
 
-### №3 — M15 buffer не реализован (HIGH)
+### №3 — M15 buffer не реализован (HIGH — **FIXED 2026-05-22**)
 
 [manager.py:445](auragrid/python/bot/analytics/manager.py#L445):
 ```python
@@ -107,6 +107,13 @@ tfs_to_backfill = {self._primary_tf, Timeframe.H1, Timeframe.D1}  # M15 НЕ В�
 - [indicator_pipeline.py:73](auragrid/python/bot/analytics/indicator_pipeline.py#L73) — `atr_m15` в `empty_indicators()` schema, но в `recompute_indicators` ([line 155-234](auragrid/python/bot/analytics/indicator_pipeline.py#L155-L234)) блок для M15 отсутствует (есть primary_tf, H1, D1).
 
 UI [Analytics/index.tsx:114](auragrid/desktop/src/pages/Analytics/index.tsx#L114) собирает `deployInputs.atr_m15 = snap.indicators.atr_m15 ?? 0` — fallback на 0, deployment table работает с нулевыми ATR → catastrophic risk estimation = нули.
+
+**Fix (2026-05-22, journal [[2026-05-22-analytics-p1-m15-buffer]]):**
+1. `Timeframe.M15` добавлен в `tfs_to_backfill` (manager.py:_backfill) — buffer заполняется из MT5 при старте analytics-процесса.
+2. В `recompute_indicators` после H1-блока добавлен M15-блок: `compute_atr(df, n=14)` при `len(m15_buf) >= 14`. Минимально достаточно, потому что atr_m15 — единственный потребитель из indicators schema.
+3. UI кнопка «Deployment Table» становится активной автоматически — `deployInputs.atr_m15` теперь приходит ненулевым, проверка `deployInputs && atr_m15 > 0` проходит.
+
+Тесты — `tests/analytics/test_b3_decompose.py::TestIndicatorPipeline` (3 новых кейса: warm/short/missing) + `tests/analytics/test_manager_backfill_m15.py` (1 кейс: backfill включает M15).
 
 ## Что показывается в UI и почему
 
@@ -123,7 +130,7 @@ UI [Analytics/index.tsx:114](auragrid/desktop/src/pages/Analytics/index.tsx#L114
 | `position_buy/sell` | ✗ | [snapshot_builder.py:416](auragrid/python/bot/analytics/snapshot_builder.py#L416) — `if ctx is None or symbol is None: return None, None` |
 | `calendar_upcoming` | ✗ | MT5 API mismatch |
 | `alerts_active` | пусто | правила не триггерятся без данных |
-| DeploymentTable (расчёт риска стратегии) | кнопка disabled | `deployInputs` требует magic + grid_params + atr_*, при null'ах = null |
+| DeploymentTable (расчёт риска стратегии) | ✓ после P0+P1 | После 2026-05-22: symbol резолвится → buffers заполняются → atr_m15/h1/d1 ненулевые → кнопка активна |
 | RiskMeter (главный экран) | работает независимо | из бота (`core/risk.py`), не из analytics-процесса |
 
 ## Сопутствующие проблемы
@@ -141,7 +148,7 @@ Analytics и бот пишут в один `%APPDATA%/GridScalp/logs/bot.log`. �
 В порядке убывания:
 
 1. ~~**P0 — Symbol resolution.**~~ ✅ **DONE (2026-05-22)** — см. секцию №1 fix выше.
-2. **P1 — M15 buffer.** Добавить M15 в `tfs_to_backfill` + блок в `recompute_indicators` по образцу H1. Это разблокирует DeploymentTable.
+2. ~~**P1 — M15 buffer.**~~ ✅ **DONE (2026-05-22)** — см. секцию №3 fix выше.
 3. **P1 — Calendar fallback.** Подключить `load_csv_fallback` (положить CSV в дистрибутив, или подтянуть из ForexFactory/Investing.com).
 4. **P2 — Сепарация лог-файлов** analytics → `analytics.log`, бот → `bot.log`.
 5. ~~**P2 — Degraded-mode UI badge.**~~ ✅ **DONE (2026-05-22, попутно с P0)** — снапшот публикует `system_status`, UI рисует красный/жёлтый Alert.
