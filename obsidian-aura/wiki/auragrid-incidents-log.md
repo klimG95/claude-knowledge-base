@@ -2,7 +2,7 @@
 type: incident-log
 tags: [auragrid, incidents, operations]
 created: 2026-05-22
-updated: 2026-05-22
+updated: 2026-05-25
 ---
 
 # AuraGrid — Incidents log
@@ -13,6 +13,26 @@ updated: 2026-05-22
 - Запись делается в момент диагностики, не пост-фактум
 - Если инцидент → фикс закрыт коммитом, обязательно линковать SHA
 - Секция Prevention важнее остальных — это материал для будущих агентов
+
+---
+
+## След решения 2026-05-25 — TZ TRAIL_REWORK v1.0: переработка трейлинга
+
+**Status:** designed → implemented → tested (атомарный PR одного дня).
+**Тип записи:** не инцидент — намеренное архитектурное решение, оформленное как ADR-002. Запись здесь — указатель «почему изменилась формула трейлинга после 2026-05-25», чтобы будущие сессии не искали в commit log.
+
+**Что изменилось:**
+- Удалены `scalping.pending_order_offset` и `conservative_grid.pending_order_offset` из BotConfig (`extra="forbid"` → старые yaml отвергаются).
+- Семантика `trail_size` / `trail_update_distance` (и `_profit`-вариантов) изменена: `trail_size` — удалённость, `trail_update_distance` — частота. Порог пересчёта = `trail_size + trail_update_distance`.
+- Триггер первого выставления pending: `|цена − last_open| ≥ current_step + trail_size` (вариант B с overshoot); pending встаёт ровно на `current_step` пт от `last_open_price`.
+- Снят инвариант `trail_update_distance_profit > trail_size_profit`; заменён на `trail_update_distance > 0` и `trail_update_distance_profit > 0`.
+- `config_version` 1 → 2, миграция yaml — жёсткое отвержение с `IncompatibleConfigVersionError` + понятным сообщением.
+
+**Источники:** [[adr-002-trail-rework-mq5-parity-departure]] (контекст + миграция), `auragrid/docs/tz/TZ_TRAIL_REWORK_v1.0.md` (детали по слоям), [[2026-05-25]] (хронология сессии), [[auragrid-trading-settings]] / [[auragrid-trading-core]] (обновлённые wiki).
+
+**Что не сломалось:** 696/696 pytest зелёные, npm build OK, cargo check OK. Manual smoke acceptance — закрыт `python/tests/test_trail_rework_acceptance.py` (численный пример ТЗ §2.5 для SELL и BUY).
+
+**Чек-лист для будущих сессий:** при следующем релизе MSI тестировщик обязан **пересоздать все стратегии через UI** (или удалить `%APPDATA%\GridScalp\strategies\`). Семантика trail-параметров поменялась — старые значения переносить вручную нельзя, геометрия сетки и пороги пересчёта будут другими.
 
 ---
 

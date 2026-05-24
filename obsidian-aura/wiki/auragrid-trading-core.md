@@ -5,7 +5,7 @@ component: bot.core
 layer: code
 shape: domain-hub
 created: 2026-05-22
-updated: 2026-05-22
+updated: 2026-05-25
 ---
 
 # AuraGrid — Trading core
@@ -87,6 +87,34 @@ UX-семантика IPC `close_channel`/`close_all` изменена: вмес
 Гард двойной активации: если `state.trail_sl != 0` (трейлинг уже активен) → `arm_manual` возвращает `ALREADY_ACTIVE`, не трогает `state.trail_sl` (иначе можно понизить SL — нарушение инварианта #4).
 
 IPC `CloseResult` теперь содержит `armed_trail: bool` (default False для backward-compat); UI рисует разный текст уведомления в зависимости от флага.
+
+### Универсальная формула трейлинга (TZ TRAIL_REWORK v1.0, 2026-05-25)
+
+Применяется одинаково к pending-трейлингу (scalp/CG) и profit-SL-трейлингу (scalp/CG) — четыре трейлинга, одна формула. См. [[adr-002-trail-rework-mq5-parity-departure]].
+
+**Триггер первого выставления pending (вариант B с overshoot):**
+```
+BUY : ask <= last_open_price − (current_step + trail_size) × point
+SELL: bid >= last_open_price + (current_step + trail_size) × point
+```
+Действие: pending выставляется на `bid ± trail_size × point` — это **ровно `current_step` пт от `last_open_price`**. Ключевой инвариант геометрии сетки.
+
+**Универсальный трейлинг (pending и profit-SL):**
+```
+threshold = trail_size + trail_update_distance
+на каждом тике:
+    dist = |цена − ордер/SL|
+    если dist > threshold И сторона = «прибыль/добор»:
+        ордер/SL → (цена ± trail_size)
+```
+«Сторона»: для pending — в сторону добора (BUY ниже, SELL выше); для SL — в сторону прибыли (BUY выше, SELL ниже). Обратно никогда не двигается (инвариант #4 для SL, аналог для pending).
+
+**Что изменилось vs MQL5-эталона:**
+- Удалён параметр `PendingOrderOffset` (scalp + CG); семантика растворилась в `trail_size`.
+- Порог пересчёта трейлинга = `trail_size + trail_update_distance` (раньше сравнивалось с абсолютным `|цена − ордер|` против только `trail_update_distance`).
+- Снят инвариант `trail_update_distance_profit > trail_size_profit`; заменён на простую проверку `trail_update_distance > 0`.
+
+Acceptance: `python/tests/test_trail_rework_acceptance.py` — закрепляет численный пример из ТЗ §2.5.
 
 ### profit_fixing_direction vs auto_calculated_profit
 - **profit_fixing_direction (USD):** активирует trailing SL когда `floating_pl ≥ value`

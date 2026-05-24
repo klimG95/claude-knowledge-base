@@ -2,7 +2,7 @@
 type: moc
 tags: [auragrid, project, trading-bot, mql5-port]
 created: 2026-05-22
-updated: 2026-05-22
+updated: 2026-05-24
 ---
 
 # AuraGrid — MOC
@@ -34,6 +34,7 @@ updated: 2026-05-22
 - [[auragrid-incidents-log]] — журнал инцидентов и анти-паттернов
 - [[auragrid-log-analysis]] — методология чтения desktop.log + bot.log
 - [[auragrid-trading-core]] — детали торгового ядра (engine/protection/profit_trailing)
+- [[auragrid-trading-settings]] — полный каталог настроек пресета (general/scalping/CG/mt5)
 - [[methodology-overview]] — общая методология vault'а
 
 ## Источник

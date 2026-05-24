@@ -4,6 +4,49 @@
 
 ---
 
+## 2026-05-25
+
+### TZ TRAIL_REWORK v1.0 — переработка логики трейлинга (атомарный PR)
+
+- Реализовано внутрипроектное ТЗ `auragrid/docs/tz/TZ_TRAIL_REWORK_v1.0.md`: ломающее изменение схемы пресета (`config_version` 1 → 2), удалены поля `scalping.pending_order_offset` и `conservative_grid.pending_order_offset`, изменена семантика `trail_size` / `trail_update_distance` (теперь это «удалённость» и «частота»). Универсальная формула трейлинга — `threshold = trail_size + trail_update_distance` — применяется к четырём трейлингам (scalp pending, CG pending, scalp profit-SL, CG profit-SL).
+- Создан [[adr-002-trail-rework-mq5-parity-departure]] — Status: accepted. Намеренный отход от MQL5-эталона по этому параметру. Контекст, миграция yaml у клиентов (жёсткое отвержение + понятное сообщение), verify-критерии.
+- [[auragrid-trading-settings]] — переписаны разделы про trail/pending параметры (#9, #18-19, #22-23, #27, #29-30, #35-36), TL;DR-блок с TZ-предупреждением, сводка валидаций (новые `trail_update*>0`, снят старый model-инвариант), анти-паттерны #3. Сохранены Surgical-правила: общие разделы не тронуты. `updated: 2026-05-25`.
+- [[auragrid-trading-core]] — добавлен раздел «Универсальная формула трейлинга» с триггером первого выставления (вариант B с overshoot) + универсальным трейлингом + сравнением с MQL5-эталоном. `updated: 2026-05-25`.
+- [[auragrid-incidents-log]] — добавлен «след решения» 2026-05-25 (не инцидент, а указатель на ADR-002 для будущих сессий).
+- [[index]] — добавлена ссылка на adr-002.
+- Journal — [[2026-05-25]].
+- Auto-memory — указатель на adr-002 добавлен.
+- Реализация в auragrid-репо: 56 файлов (pydantic + Python ядро + аналитика + симулятор + UI + Rust + yaml-пресеты + тесты + qa-docs + tools). Acceptance — `python/tests/test_trail_rework_acceptance.py` закрепляет численный пример ТЗ §2.5 для SELL/BUY. Pytest 696/696 ✅, npm build ✅, cargo check ✅.
+
+---
+
+## 2026-05-24
+
+### Каталог торговых настроек AuraGrid (PHASE 1 перед оптимизацией)
+
+- Создана wiki [[auragrid-trading-settings]] — исчерпывающий справочник по 36 редактируемым параметрам торгового пресета (general/scalping/conservative_grid/notifications + торговая часть mt5.symbol) + служебные поля. По каждому: yaml-имя, тип, валидация, назначение, ключевое место использования, UI label/описание.
+- Сводка валидаций (13 правил pydantic) + «потенциальные дыры» (поля без явной валидации — кандидаты на оптимизацию).
+- Раздел про поведение редактирования (Step3Editor + apply_params live-restart + клиентский pre-flight инвариантов).
+- Анти-паттерны (7 пунктов: не редактировать magic, не путать max_loss и max_scalp_loss, cg.spread_buffer отсутствует, секреты mt5 не в файле пресета и т.д.).
+- [[auragrid]] MOC — ссылка добавлена в раздел «Операционные знания».
+- [[index]] — ссылка добавлена в раздел «Компоненты AuraGrid».
+- Auto-memory — указатель `reference_trading_settings` добавлен.
+- Цель — заполнить пробел перед сессией оптимизации и отладки настроек торговли.
+
+### Интеграция принципов Карпатого в методологию vault'а (ADR-001)
+
+- Создан [[adr-001-surgical-minimal-vault-updates]] — первый ADR в vault'е. Status: accepted. Решение: точечно интегрировать два из четырёх принципов Карпатого (Surgical Changes, Simplicity First); «Think Before Coding» не добавлять (конфликт с [[feedback_technical_autonomy]]); «Goal-Driven Execution» применить к PHASE 3 runbook'а как verify-критерии.
+- Источник анализа — репо [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills).
+- [[AGENTS]] — добавлены два раздела перед «Принципы, которые объединяют всё вышесказанное»:
+  - **«Минимализм правок» (Surgical updates)** — менять только то, что относится к текущей задаче; не «улучшать» соседние формулировки; стилистические правки — отдельной сессией под триггером «ревизия».
+  - **«Минимализм структуры» (Simplicity First)** — никаких спекулятивных секций/шаблонов/страниц «на будущее»; шаблон возникает после 2-3 однотипных страниц, а не до.
+- [[runbook-vault-integration]] — PHASE 3 расширена подразделом **«Verify (явные критерии завершения)»**: битые `[[ссылки]]` = 0, `index.md` синхронизирован, `CHANGELOG.md` содержит запись, `journal/YYYY-MM-DD.md` существует, frontmatter валиден, auto-memory указатель добавлен при появлении ссылочного эталона.
+- [[index]] — добавлен новый раздел «ADR» со ссылкой на adr-001.
+- Journal — [[2026-05-24]].
+- Ретроспективно существующие страницы не правятся (по принципу Surgical из самого ADR); новые правила применяются к будущей работе.
+
+---
+
 ## 2026-05-22
 
 ### 🚩 Большой чекпоинт — «Analytics unblocked» (baseline для отката)
