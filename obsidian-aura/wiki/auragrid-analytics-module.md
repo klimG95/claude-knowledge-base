@@ -1,16 +1,20 @@
 ---
 type: component
-tags: [auragrid, analytics, second-process, ipc, unblocked]
+tags: [auragrid, analytics, second-process, ipc, unblocked, integrity-fixed]
 component: bot.analytics
 layer: code
 shape: domain-hub
 created: 2026-05-22
-updated: 2026-05-22
+updated: 2026-05-26
 ---
 
 # AuraGrid — Analytics module (состояние и архитектура)
 
+> **🟢 Обновление 2026-05-26 (вечер):** P0 #1-4 и P1 #5-6 из аудита 2026-05-26 закрыты реализацией TZ_ANALYTICS_INTEGRITY_v1.0 — атомарный PR со всеми фиксами, 1278 pytest passed (+25 новых), `npm run build` OK. ATR Analytics ожидаемо ≈ ATR MT5 (Δ <2 %) после установки нового MSI; manual cross-validation см. `docs/qa/scenarios/analytics_smoke.md`. Раздел «Аудит 2026-05-26» ниже сохранён исторически — это диагностика того, что было пофикшено. UI добавлен Alert «Нет активной стратегии» для разведения by-design vs реального бага.
+
 **TL;DR.** Analytics — отдельный python-процесс со своим MT5-инстансом и IPC-портом 8770, который должен снабжать UI 12 виджетами + DeploymentTable (расчёт риска стратегии). На версии HEAD (677811c, релиз 1.0.1) фактически работали только Spread и Sessions, остальное — null'ы. **После раундов 5 (P0 symbol) → 6 (P1 M15) → 7 (P1 Calendar + P2 logs + P2 e2e) — все три корневые причины разблокированы.** Snapshot непустой; UI рисует degraded-status badge при любом fallback (heuristic symbol / CSV calendar / no calendar / mt5 disconnected); ротация логов защищена от PermissionError; integration smoke e2e проверяет `indicators.atr_*` через WebSocket в каждом CI прогоне.
+
+> **Однако** живой snapshot ≠ корректный snapshot. Независимый аудит 2026-05-26 (после получения первого работающего UI у пользователя) показал, что **корректность данных** требует отдельного раунда фиксов (P0 #1-4). См. ниже.
 
 ## Когда читать эту страницу
 
@@ -163,6 +167,124 @@ Analytics и бот пишут в один `%APPDATA%/GridScalp/logs/bot.log`. �
 6. ~~**P2 — Integration smoke.**~~ ✅ **DONE (2026-05-22, раунд 7)** — `tests/analytics/test_manager_smoke.py::test_manager_e2e_indicators_nonempty` (online-MT5 mock + WS get_snapshot → проверка `indicators.atr_primary/atr_m15/atr_h1 != None`).
 
 **Все приоритеты закрыты.** Модуль готов к ручной верификации на тестовом MT5-аккаунте.
+
+## Аудит 2026-05-26 — обнаруженные баги данных
+
+Контекст: после раздачи MSI пользователь подтвердил «модуль аналитики впервые заработал», попросил верификацию параметров через внешние независимые источники. Ручная сверка ATR(14) Analytics vs MT5-indicator на XAUUSD.N выявила трёхуровневые расхождения (D1 +4.24%, **H1 +48.67%**, M5 +13.37%) → полный аудит кода тремя параллельными Agent-сессиями.
+
+### P0 #1 — Stale buffers (M15/H1/D1 не обновляются)
+
+`python/bot/analytics/manager.py:653-697` — `_bar_close_loop` polls **только `self._primary_tf` (M5)**. M15/H1/D1 буферы заполняются один раз через `_backfill()` при старте и больше **никогда не освежаются**. Чем дольше работает Analytics, тем сильнее эти данные «застаивают».
+
+Влияет на: `atr_h1`, `atr_d1`, `adx_h1`, `bbw_h1`, `parkinson_d1`, `garman_klass_d1`, `realized_vol_d1`, `intraday_vol_profile`, `atr_percentile_d1`. Объясняет ATR H1 +48.67% (главный «выброс»).
+
+### P0 #2 — Backfill включает формирующийся бар
+
+`python/bot/analytics/fetcher.py:92`:
+```python
+rates = mt5.copy_rates_from_pos(symbol, native_tf, 0, bars_needed)
+```
+Стартовая позиция `0` = текущий незакрытый бар (для контраста: `detect_bar_close` в `fetcher.py:230` явно использует `1` с комментарием «1 = последний закрытый»).
+
+Wilder seed ATR/ADX отравлен этим частичным баром. На primary TF эффект «вымывается» ≈5 часов (вес 1/14 в Wilder rectivity), на H1/M15/D1 (вкупе с #1) — никогда. Объясняет ATR M5 +13.37% и часть D1 +4.24%.
+
+### P0 #3 — `session_vol_ratio` структурно неверная формула
+
+`python/bot/analytics/volatility.py:94`:
+```python
+return safe_div(atr_h1_current, baseline, default=0.0)
+```
+- `atr_h1_current` — **в цене** (XAUUSD ~$15.12)
+- `baseline = mean(abs(np.log(close/open)))` (`volatility.py:81`) — **безразмерный |log-return|** (~0.0013)
+
+Деление одного на другое даёт мусор. Сверка: 15.12 / 0.0013 ≈ 11630 ≈ наблюдаемое **11573.39× ANOMALY** в UI Sessions. Это не «деление на ноль», а архитектурная ошибка.
+
+Правильно: либо `(atr_h1 / close) / baseline` (привести к log-return-эквиваленту), либо считать `realized_vol_h1` (через `compute_realized_vol`) и сравнивать с profile из той же метрики.
+
+### P0 #4 — Spread block: 3 ложных метрики в одном виджете
+
+`python/bot/analytics/snapshot_builder.py:399,406`:
+
+| Поле | Что в коде | Реальность |
+|---|---|---|
+| `median_24h_pt` | `sum(history) / len(history)` (snapshot_builder.py:399) | mean, не median |
+| Окно «24h» | `_spread_history[-7200:]` при 1Hz sampling | ~2h, не 24h |
+| `swap_today` | `"swap_today": 0.0` хардкод (snapshot_builder.py:406) | Никогда не считается; `total_swap_of_positions` (spread.py:117) существует, но не вызывается |
+| `ticks_per_sec` | `record()` на каждом 10Hz tick_loop + 1Hz snapshot_loop | poll rate (10.5≈11), не tick rate; нет дедупликации по `tick.time_msc` |
+
+### P1 — асимметрия UI vs by-design backend
+
+- **«ATR/PD M15 = —»** — это **не сам ATR на M15**, а ratio `atr_m15 / (PriceDistance × point)` (`volatility.py:33-45`). Требует registered `StrategyContext` (`snapshot_builder.py:321,329`). Если стратегия не RUNNING → `ctx is None` → ratio = None → UI «—». Это by-design (Wave A.6), но диагностически невидимо: `atr_to_pd_ratio_h1` и `atr_to_cg_pd_ratio_h1` тоже None по той же причине, и UI их вообще не показывает — пользователь видит только M15-прочерк и думает что баг локальный.
+
+### P1 — Regime hysteresis на snapshot-ticks, не bar-closes
+
+`snapshot_builder.py:363` — `_regime_stabilizer.push(raw)` на каждом snapshot-tick (~1 Hz). Конфиг `hysteresis_bars_per_tf=3` подразумевает «3 бара», по факту 3 секунды. Эффективно гистерезис отключён.
+
+### Что аудит подтвердил как корректное
+
+- **CHAOS режим** — корректный fallback по `regime.py:93` при `adx_h1 > 20 AND er_primary ≤ 0.4` (mixed signals; ADX выше границы тренда, но ER слишком низкий для подтверждения).
+- **Sessions Active=NY** — формула UTC-окон (`sessions.py:27-32`, `current_sessions()`) корректна.
+- **Календарь CSV fallback** — ожидаемо после fix 2026-05-22.
+- **M15 fix 2026-05-22** живёт без регрессии — `Timeframe.M15` в `tfs_to_backfill` (manager.py:570), блок M15 в `recompute_indicators` (indicator_pipeline.py:217-226), тесты зелёные.
+- **«(58%)» рядом с ATR D1** — это percentile rank через 252-баровое окно (`indicators/percentile.py:20-37`), формула корректна.
+
+### Сводка влияния
+
+| Параметр | Статус после аудита | Корень |
+|---|---|---|
+| ATR D1/H1/M5 | ⚠/❌/⚠ завышены | P0 #1+#2 |
+| ATR/PD M15 «—» | ✓ by-design | not-a-bug |
+| ADX H1, BBW H1 | ⚠ стейл | P0 #1 |
+| Parkinson, GK, Realized D1 | ⚠ стейл | P0 #1 |
+| Vol vs hour-baseline 11573× | ❌ сломанная формула | P0 #3 |
+| Spread Median 24h / Ticks/sec / Swap today | ❌×3 | P0 #4 |
+| Spread Current / Z-score | ⚠ (база сломана) | P0 #4 |
+| Regime CHAOS / Sessions Active / Календарь | ✓ корректно | — |
+
+**Итого: 4 системных бага влияют на 13+ из ~20 параметров.** Полный реестр с конкретными `path:line` — в [[auragrid-incidents-log]] «2026-05-26 — Аудит Analytics» и в auto-memory `reference_analytics_audit_2026_05_26`.
+
+### Приоритет следующего раунда фиксов
+
+1. **P0 #2 первым** (1-строчный фикс `fetcher.py:92` `0 → 1`) — самостоятельный, без побочек.
+2. **P0 #1** (добавить M15/H1/D1 в `_bar_close_loop`) — после #2, чтобы освежение работало уже с правильным backfill.
+3. **P0 #3** (`session_vol_ratio` — переписать формулу + warm-up gate на минимум N полных дней профиля).
+4. **P0 #4** (spread block — median вместо mean, swap из MT5 positions, dedup ticks по `time_msc`).
+5. **P1** (regime hysteresis на bar-close + UI бейдж «strategy_not_registered» для M15-asymmetry).
+6. **Acceptance после фикса:** повторная сверка ATR Analytics vs MT5-indicator на XAUUSD.N — ожидается <2% на всех TF (только seed-noise Wilder).
+
+Реализационный паттерн — атомарный PR со всеми 4 P0 + регрессионные unit-тесты (как было сделано для TRAIL_REWORK 2026-05-25), либо ТЗ → реализация в формате `TZ_ANALYTICS_INTEGRITY_v1.0.md`. Выбор стратегии — за пользователем.
+
+### Roadmap: ТЗ_ANALYTICS_INTEGRITY_v1.0 создан 2026-05-26
+
+Реализационный документ — `auragrid/docs/tz/TZ_ANALYTICS_INTEGRITY_v1.0.md` (структура по образцу TZ_TRAIL_REWORK_v1.0.md). 10 разделов:
+- §2 Целевая модель — конкретные «было/стало» формулы для каждого P0/P1 + численный acceptance example на 7 субтестах (§2.7).
+- §4 Изменения по 13 слоям (fetcher / manager / volatility / spread / snapshot_builder / UI / тесты / docs / vault).
+- §6 Verify-критерии 10 пунктов, включая **manual cross-validation ATR Analytics vs MT5-indicator на XAUUSD.N с допуском Δ <2%**.
+- §7 Чек-лист 14 этапов реализации.
+
+### Реализация TZ_ANALYTICS_INTEGRITY_v1.0 — 2026-05-26 (вечер)
+
+**Status:** implemented (закрыто). SHA `fb67723`. Все 4 P0 + 2 P1 реализованы атомарным PR. pytest 1278 passed (1253 baseline + 25 новых), npm build OK, регрессии 0. Manual cross-validation ATR Analytics vs MT5 — отложена пользователю по `docs/qa/scenarios/analytics_smoke.md`.
+
+| Пункт | Где фикс | Что было | Что стало |
+|---|---|---|---|
+| P0 #1 | `manager._bar_close_loop` | polling только primary TF | tf_order = primary + остальные buffers; sequential; `event=bar_close_detected` per TF |
+| P0 #2 | `fetcher._backfill_native:92` | `copy_rates_from_pos(..., 0, N)` | `copy_rates_from_pos(..., 1, N)` |
+| P0 #3 | `volatility.session_vol_ratio` + `compute_intraday_vol_profile` | размерностное несоответствие | `(atr_h1 / last_close_h1) / baseline`; warm-up gate `min_obs_per_hour=3` → `None` для часа без данных; `RollingBuffer.last_close()` |
+| P0 #4.1 | `manager._spread_history` + `snapshot_builder.build_spread_block` | `list[-7200:]` mean | `deque(maxlen=86400)` + `np.median`; warm-up <60 → `None` |
+| P0 #4.2 | `snapshot_builder.build_spread_block` | хардкод `0.0` | `total_swap_of_positions(mt5.positions_get(symbol))` |
+| P0 #4.3 | `spread.TickRateTracker.record` + `_tick_loop` | poll rate (10.5) | dedup по `tick_time_msc`; `sample_spread_with_prices` возвращает `time_msc` 5-м tuple-полем; убран дублирующий вызов из `build_spread_block` |
+| P1 #5 | `snapshot_builder` system_status + `desktop/...index.tsx` Alert + `widgets.tsx` Tooltip | непонятно «—» в `ATR/PD M15` | `strategy_context_registered: bool`; жёлтый Alert + Tooltip |
+| P1 #6 | `snapshot_builder.build_regime_block` + `_indicators_recomputed_this_tick` | push на каждом 1Hz tick | push только на «фронте» bar_close |
+
+**TS UI:** SVR cap ≥99 → «99+×» + `console.warn` outlier; SpreadBlock.median_24h_pt теперь `number | null`; SystemStatus.strategy_context_registered поле; Median 24h tooltip.
+
+**Тесты (новые):**
+- `tests/analytics/test_integrity_acceptance.py` (11 тестов) — закрепляет 7 субтестов §2.7 ТЗ (ATR/ADX детерминистично, session_vol_ratio=1.0 на anchor 16.50/3300/0.005, spread median робастный к outlier, swap_today=-2.25 на mock, dedup ticks, regime gate 0 push без bar_close, regime stabilize после 3-х bar_close).
+- `tests/analytics/test_integrity_backfill_and_multi_tf.py` (3 теста) — `start_pos=1`, `detect_bar_close` вызывается per TF (M5+M15+H1+D1), новый бар маркирует `_indicators_dirty=True`.
+- Обновлены `test_volatility.py`, `test_volatility_b2.py`, `test_spread.py` под новые сигнатуры.
+
+**Что НЕ изменилось (Surgical по ADR-001):** архитектура (второй python-процесс, IPC порт 8770), имена IPC-полей snapshot (`atr_h1`, `session_vol_ratio`, `median_24h_pt`), config_version yaml, unblock-фиксы 2026-05-22 (symbol resolution, M15 buffer, CSV calendar, log rotation, system_status).
 
 ## Связано с
 

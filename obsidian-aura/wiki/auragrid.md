@@ -2,8 +2,10 @@
 type: moc
 tags: [auragrid, project, trading-bot, mql5-port]
 created: 2026-05-22
-updated: 2026-05-24
+updated: 2026-05-25
 ---
+
+> **TL;DR обновление 2026-05-25 (4-я сессия):** AuraImpulse v1.0 полностью реализована — Python ядро (`python/bot/core/impulse.py`), Engine dispatch (`main.py::build_engine`), IPC handlers, Rust strategies.rs, UI Wizard + Editor + бейджи. Полный pytest 1253 passed, cargo check OK, npm build OK. Manual QA — `docs/qa/scenarios/impulse_lifecycle.md`. Концепция [[auragrid-impulse-strategy]] и ADR-003 без изменений (реализация им полностью соответствует).
 
 # AuraGrid — MOC
 
@@ -20,7 +22,7 @@ updated: 2026-05-24
 
 | Слой | Где живёт | Что делает |
 |------|-----------|------------|
-| Trading core (Python) | `python/bot/core/` | Engine, Scalping, ConservativeGrid, ProfitTrailer, Protection, Risk |
+| Trading core (Python) | `python/bot/core/` | Engine, Scalping, ConservativeGrid, ProfitTrailer, Protection, Risk + **Impulse** (single-shot breakout, см. [[auragrid-impulse-strategy]]) |
 | MT5 интеграция | `python/bot/mt5/` | Client wrap, Executor (retry), Scanner, fake-сервер для тестов |
 | IPC | `python/bot/ipc/`, `desktop/src-tauri/src/` | WebSocket порт 8765/8766, протокол + handlers |
 | Tauri shell | `desktop/src-tauri/` | Rust обёртка процесса бота, IPC bridge |
@@ -35,6 +37,9 @@ updated: 2026-05-24
 - [[auragrid-log-analysis]] — методология чтения desktop.log + bot.log
 - [[auragrid-trading-core]] — детали торгового ядра (engine/protection/profit_trailing)
 - [[auragrid-trading-settings]] — полный каталог настроек пресета (general/scalping/CG/mt5)
+- [[auragrid-impulse-strategy]] — концепция новой стратегии `AuraImpulse` (отдельный preset-type, single-shot breakout)
+- [[adr-003-impulse-strategy-new-preset-type]] — архитектурное решение об отдельном `strategy_type`
+- [[auragrid-msi-uninstall-cleanup]] — деинсталляция MSI с опциональной очисткой `%APPDATA%\GridScalp\` (in-app галочка)
 - [[methodology-overview]] — общая методология vault'а
 
 ## Источник

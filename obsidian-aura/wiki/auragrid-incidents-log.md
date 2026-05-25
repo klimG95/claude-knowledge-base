@@ -2,7 +2,7 @@
 type: incident-log
 tags: [auragrid, incidents, operations]
 created: 2026-05-22
-updated: 2026-05-25
+updated: 2026-05-26
 ---
 
 # AuraGrid — Incidents log
@@ -13,6 +13,102 @@ updated: 2026-05-25
 - Запись делается в момент диагностики, не пост-фактум
 - Если инцидент → фикс закрыт коммитом, обязательно линковать SHA
 - Секция Prevention важнее остальных — это материал для будущих агентов
+
+---
+
+## 2026-05-26 — Аудит Analytics: 4 системных бага в данных snapshot
+
+**Status:** diagnosed (утро) → **implemented (вечер)**. Фикс закрыт PR/коммитом, см. Resolution ниже.
+
+**Resolution (2026-05-26, реализация по TZ_ANALYTICS_INTEGRITY_v1.0, SHA `fb67723`):**
+- **Закрыты все 4 P0 + 2 P1.** Реализация атомарным PR по §7 чек-листу ТЗ:
+  - P0 #2 (`fetcher.py:92` `start_pos=0 → 1`) — backfill только закрытыми барами.
+  - P0 #1 (`manager._bar_close_loop` multi-TF) — polling по всем TF из `self.buffers` (primary first), `event=bar_close_detected` логируется per TF.
+  - P0 #3 (`session_vol_ratio` + warm-up) — новая сигнатура `(atr, last_close_h1, profile, hour)`, обе стороны в |log-return|; `compute_intraday_vol_profile` с warm-up gate `min_obs_per_hour=3` → 3-5 дней наполнения, до этого `None`; `RollingBuffer.last_close()` добавлен.
+  - P0 #4.1 (spread median) — `deque(maxlen=86400)` вместо `list[-7200:]`, `np.median` вместо `sum/len`, warm-up < 60 → `None`.
+  - P0 #4.2 (swap_today) — `total_swap_of_positions(mt5.positions_get(symbol))` вместо хардкода `0.0`.
+  - P0 #4.3 (ticks dedup) — `TickRateTracker.record(tick_time_msc=...)` с защитой от повтора msc; единая точка вызова — `_tick_loop` (дублирующий вызов из `build_spread_block` удалён); `sample_spread_with_prices` теперь возвращает `time_msc` 5-м tuple-полем.
+  - P1 #5 (`strategy_context_registered`) — поле в `system_status` + желтый Alert в Analytics UI + Tooltip на «ATR/PD M15».
+  - P1 #6 (regime gate) — `push()` в `RegimeStabilizer` строго на «фронте» bar_close через `_indicators_recomputed_this_tick`.
+- **TS UI:** session_vol_ratio cap ≥99 → «99+×» + `console.warn`; Median 24h tooltip; SystemStatus.strategy_context_registered поле; SpreadBlock.median_24h_pt теперь `number | null`.
+- **Тесты:** 1278 passed (+25 новых: 11 acceptance `test_integrity_acceptance.py` §2.7, 3 multi-TF/backfill `test_integrity_backfill_and_multi_tf.py`, +11 в обновлённых `test_volatility*.py` / `test_spread.py`). Регрессии 0.
+- **Build:** `tsc --noEmit && vite build` — без ошибок.
+- **Docs:** добавлен `docs/qa/scenarios/analytics_smoke.md` (manual cross-validation ATR Analytics vs MT5 Δ<2%, spread block sanity, SVR warm-up, strategy_context Alert).
+- **Manual cross-validation на тестовом MT5 — отложена пользователю (см. analytics_smoke §1):** acceptance Δ ATR < 2 % на D1/H1/M5 после установки нового MSI.
+
+**Что НЕ изменилось (по ADR-001 Surgical):** архитектура (отдельный python-процесс + IPC порт 8770), IPC схема (имена полей `atr_h1`, `session_vol_ratio`, `median_24h_pt` сохранены), config_version yaml, unblock-фиксы 2026-05-22 (symbol resolution, M15 buffer, CSV calendar, log rotation, system_status).
+
+---
+
+**Триггер:** Пользователь подтвердил «модуль аналитики впервые заработал» после fix'ов 2026-05-22 и попросил верифицировать параметры через внешние источники. Ручная сверка ATR(14) на XAUUSD.N через MT5-indicator выявила расхождения по трём TF (D1 +4.24%, H1 **+48.67%**, M5 +13.37%) → переход на полный аудит кода.
+
+**Метод:** PHASE 1 vault → параллельно три Agent-сессии по направлениям (Indicators / Sessions+Spread+Regime / Buffers+M15-pipeline). Каждый агент прочитал 12-15 файлов и нашёл `path:line` для findings.
+
+**Найдено — 4 P0 системных бага:**
+
+1. **Stale buffers (M15/H1/D1 не обновляются после старта).** `python/bot/analytics/manager.py:653-697` (`_bar_close_loop`) polls только `self._primary_tf`. Прочие буферы заморожены на момент `_backfill()`. Влияет на: ATR H1/D1, ADX H1, BBW H1, Parkinson D1, GK D1, Realized D1, intraday_vol_profile. Объясняет ATR H1 +48.67%.
+
+2. **Backfill включает формирующийся бар.** `python/bot/analytics/fetcher.py:92` — `copy_rates_from_pos(symbol, native_tf, 0, bars_needed)`. Стартовая позиция `0` = текущий незакрытый бар (для контраста: `detect_bar_close` в `fetcher.py:230` явно использует `1` с комментарием «1 = последний закрытый»). Wilder seed ATR отравлен этим частичным баром. Объясняет ATR M5 +13.37% и часть D1 +4.24%.
+
+3. **`session_vol_ratio` структурно неверная формула.** `python/bot/analytics/volatility.py:94` — `safe_div(atr_h1_current, baseline, default=0.0)`. Размерностное несоответствие: ATR в цене (~$15) делится на |log-return| (~0.0013) → мусор. Сверка: 15.12 / 0.0013 ≈ 11630 ≈ наблюдаемое **11573.39× ANOMALY** в виджете Sessions.
+
+4. **Spread block: 3 ложных метрики.** `python/bot/analytics/snapshot_builder.py:399,406`:
+   - «Median 24h» = `sum/len` (mean, не median); окно ~2h при 1Hz sampling, не 24h.
+   - «Swap today» = хардкод `0.0`; `total_swap_of_positions` существует в `spread.py:117-124`, но не вызывается.
+   - «Ticks/sec» = polling rate (10.5 ≈ 10Hz tick_loop + 1Hz snapshot), не реальный тик-поток; нет дедупликации по `tick.time_msc`.
+
+**P1 (улучшения диагностики, не дефекты данных):**
+
+- **«ATR/PD M15 = —» это by-design.** Поле в UI — не `atr_m15`, а ratio `atr_m15 / (PriceDistance × point)` (`volatility.py:33-45`). Требует registered `StrategyContext` (`snapshot_builder.py:321,329`). Если стратегия не RUNNING — ratio = None → UI «—». Асимметрия UI: `atr_to_pd_ratio_h1` и `atr_to_cg_pd_ratio_h1` тоже None, но в виджете не показаны — пользователь видит только M15-прочерк и думает что это локальный баг.
+- **Regime hysteresis работает на snapshot-ticks, не bar-closes.** `snapshot_builder.py:363` — `_regime_stabilizer.push()` на каждом ~1Hz snapshot. Конфиг `hysteresis_bars_per_tf=3` подразумевает «3 бара», по факту 3 секунды. Гистерезис эффективно отключён.
+
+**Что НЕ баг (подтверждено аудитом):**
+- CHAOS — корректный fallback по `regime.py:93` при `adx_h1=21.2` (выше 20) и `er_primary ≤ 0.4` (mixed signals).
+- Sessions Active=NY, формула UTC-окон корректна (`sessions.py:27-32`).
+- Spread Current=24pt сам по себе корректен (только база сравнения сломана).
+- Календарь CSV fallback — ожидаемо (фикс 2026-05-22 живёт).
+- M15 fix 2026-05-22 живёт — `Timeframe.M15` в `tfs_to_backfill` (`manager.py:570`), M15-блок в `indicator_pipeline.py:217-226`, тесты `test_b3_decompose.py` + `test_manager_backfill_m15.py` зелёные.
+
+**Сводка по ~20 параметрам UI:** 4 системных бага влияют на 13+ значений. Полная таблица — в [[2026-05-26]] и в auto-memory `reference_analytics_audit_2026_05_26`.
+
+**Что НЕ сломалось:** unblock от 2026-05-22 не регрессировал — symbol resolution (heuristic), M15-buffer (наличие в `tfs_to_backfill`), CSV calendar fallback, log rotation guard, system_status snapshot field. Эти fix'ы живы. Обнаруженные баги — это другой пласт (формулы и обновление данных, а не доступность).
+
+**Prevention:**
+- При следующих manual-проверках Analytics — сразу сверять через MT5-indicator на том же символе (не TradingView; разница котировок XAUUSD.N vs OANDA маскирует баги). См. [[2026-05-26]] описание метода.
+- Cross-check ATR Analytics vs MT5 на одинаковых барах должен войти в acceptance до релиза Analytics-фиксов.
+- При добавлении новых производных метрик («ratio», «ratio vs baseline») — проверять размерности обеих сторон до коммита. `safe_div` не защищает от unit mismatch.
+
+**Источники:** [[2026-05-26]] (детальный аудит 3-х направлений), auto-memory `reference_analytics_audit_2026_05_26` (приоритезированный реестр + конкретные `path:line`), [[auragrid-analytics-module]] (обновлено блоком «Аудит 2026-05-26»).
+
+**Roadmap фикса:** `auragrid/docs/tz/TZ_ANALYTICS_INTEGRITY_v1.0.md` создан 2026-05-26 (вторая фаза сессии) — реализационный документ по образцу TZ_TRAIL_REWORK_v1.0.md. Атомарный PR со всеми 4 P0 + 2 P1 + acceptance numerical example (§2.7) + manual cross-validation ATR Δ<2% (§6.5). Реализация — отдельной сессией по §7 чек-листу.
+
+---
+
+## След решения 2026-05-25 (аудит) — независимая верификация AuraImpulse v1.0
+
+**Status:** audit completed — реализация соответствует отчёту, дефектов не найдено, есть список улучшений.
+**Тип записи:** не инцидент — независимый пост-имплементационный аудит 4-й сессии 2026-05-25. Поднял отдельным сеансом, чтобы дать второй взгляд на ~660 строк нового ImpulseEngine, IPC/Rust/UI-диспатч и vault PHASE 3.
+
+**Метод:** PHASE 1 vault → построчная сверка отчёта с кодом по 12 направлениям §9 ТЗ → запуск `pytest --collect-only` (1272 теста собрано — точное совпадение с заявленными 1253+1+16+2), явный прогон 84 impulse-тестов (зелёные), `cargo check` (8 pre-existing warnings, 0 новых), `npm run build` (bundle 722.31 kB — точно как в отчёте).
+
+**Подтверждено:**
+- Все fast-path заявления — присутствуют в коде: pre-fill SL в pending request, точный SLTP после fill, `_save_if_dirty` гард, trail БЕЗ `spread_buffer`, gap-handling в `_find_my_position`.
+- Pydantic dispatch через `_select_config_class` корректен; backward-compat AuraGrid через default `strategy_type="auragrid"` сохранён; `extra="forbid"` симметрично у обоих корневых моделей.
+- IPC polymorphism через `isinstance(engine, ImpulseEngine)` — 7 точек диспатча (pause/pause_all/close_channel/close_all/get_status/reset_stopped/get_snapshot).
+- Rust `StrategyEntry.strategy_type` через `#[serde(default)]`; функции `create_impulse`/`override_config_impulse`/`known_impulse_presets`; `clone_strategy` сохраняет type источника; export/import обрабатывают секцию `impulse`.
+- UI Step2 Radio + Step3EditorImpulse (13 полей) + бейджи `[AuraImpulse]`/`[AuraGrid]` + dispatch в WizardShell и StrategyPanel.
+- vault PHASE 3 в стиле ADR-001 (Surgical): концептуальная [[auragrid-impulse-strategy]] и [[adr-003-impulse-strategy-new-preset-type]] не переписаны — реализация им соответствует.
+
+**Найденные неточности отчёта (не баги в коде):**
+- Число тестов: в отчёте 79, реально **84** (parametrize в `test_impulse_config.py` даёт 35 эффективных при 18 функциях).
+- Pre-flight инвариантов в `Step3EditorImpulse` — **9**, не 10 (отсутствует `spread_buffer >= 0`). Pydantic это всё равно поймает на бэке, но клиент увидит ошибку медленнее.
+- `GeneralImpulseConfig.magic_number` имеет default `20260002` (не упомянуто в отчёте); `impulse_default.yaml` — template для Rust override, грузить напрямую через `load_config()` нельзя (нет license_key/mt5/ipc — в QA-сценарии не подсвечено).
+
+**Список рекомендаций** (13 пунктов, 3 критичных + 5 средних + 5 низких) — в [[2026-05-25]] раздел «Аудит AuraImpulse v1.0 (5-я сессия)» и в auto-memory `reference_impulse_audit_2026_05_25.md`. Критичные перед раздачей пользователю: (R1) воспроизвести 1253 passed в чистой среде с сохранением лога; (R2) Manual QA по `docs/qa/scenarios/impulse_lifecycle.md` на fake-MT5; (R3) pre-flight `tauri build --bundles msi` на dev-машине до передачи тестировщику.
+
+**Что не сломалось:** независимая верификация подтвердила исходный отчёт. Сильные стороны реализации — двойная отправка SL (окно беззащитности = 0), `_make_pending_refresher` для slippage-гигиены, детерминированная gap-сортировка по `(time_msc, time, ticket)`, унифицированный UX-сигнал «блокировка» через `max_loss_hit` alias.
+
+**Источники:** [[2026-05-25]] раздел «Аудит» (детальное прохождение и список рекомендаций), [[auragrid-impulse-strategy]] (концепция — не менялась), [[adr-003-impulse-strategy-new-preset-type]] (архитектурное решение — все 7 Verify-критериев подтверждены аудитом), auto-memory `reference_impulse_audit_2026_05_25` (приоритезированный список действий).
 
 ---
 

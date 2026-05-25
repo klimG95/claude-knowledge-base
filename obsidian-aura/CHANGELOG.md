@@ -4,7 +4,103 @@
 
 ---
 
+## 2026-05-26
+
+### Реализация TZ_ANALYTICS_INTEGRITY_v1.0 — атомарный PR (третья фаза, SHA `fb67723`)
+
+- Пользователь поручил сразу же приступить к реализации после создания ТЗ: «Ты технический специалист, который будет заниматься доработкой. Продумай процесс реализации и приступай».
+- Атомарный PR со всеми фиксами по §7 чек-листу ТЗ. Закрыто **4 P0 + 2 P1**:
+  - P0 #1 `_bar_close_loop` polling all TFs; P0 #2 `fetcher.py:92` start_pos 0→1; P0 #3 `session_vol_ratio` dimension + warm-up gate 3 obs/hour; P0 #4.1 spread `deque(86400)` + `np.median`; P0 #4.2 `swap_today` из live MT5 positions; P0 #4.3 ticks dedup по `time_msc`; P1 #5 `strategy_context_registered` + UI Alert + Tooltip «ATR/PD M15»; P1 #6 regime push на «фронте» bar_close через `_indicators_recomputed_this_tick`.
+- TypeScript: `SpreadBlock.median_24h_pt: number | null`; `SystemStatus.strategy_context_registered` поле; SVR cap ≥99 → «99+×» + console.warn outlier; Median 24h Tooltip.
+- Тесты: 1278 passed (baseline 1253 + 25 новых: `test_integrity_acceptance.py` 11 субтестов §2.7 ТЗ + `test_integrity_backfill_and_multi_tf.py` 3 unit-кейса + 11 в обновлённых `test_volatility*.py` / `test_spread.py`). Регрессии 0.
+- Build: `cd desktop && npm run build` — без ошибок.
+- Docs: `auragrid/docs/qa/scenarios/analytics_smoke.md` — manual cross-validation ATR Δ<2% + spread sanity + SVR warm-up + Alert на отсутствие strategy_context.
+- Surgical по ADR-001: имена IPC-полей snapshot не переименовываются, архитектура второго python-процесса + порт 8770 без изменений, config_version yaml без bump'а.
+- [[auragrid-analytics-module]] — раздел «Реализация TZ_ANALYTICS_INTEGRITY_v1.0 — 2026-05-26 (вечер)» с таблицей фиксов; TL;DR с 🔴 на 🟢; tag `audit-findings → integrity-fixed`.
+- [[auragrid-incidents-log]] — блок Resolution внутри 2026-05-26 секции; статус diagnosed → implemented.
+- journal [[2026-05-26]] дополнен «Третья фаза — реализация».
+- Auto-memory: `reference_analytics_audit_2026_05_26` помечен closed; `reference_analytics_module` снова отражает работающее состояние.
+- **Открытое:** manual cross-validation на тестовом MT5 (Δ ATR <2%) — пользователю по `docs/qa/scenarios/analytics_smoke.md`. Не блокирует merge.
+
+### ТЗ Analytics Integrity v1.0 (вторая фаза сессии)
+
+- Пользователь выбрал вариант «сначала ТЗ, потом реализация» (по аналогии с TRAIL_REWORK / Impulse).
+- Создан `auragrid/docs/tz/TZ_ANALYTICS_INTEGRITY_v1.0.md` — структурированный документ по образцу TZ_TRAIL_REWORK_v1.0.md.
+- Покрывает 4 P0 + 2 P1 из аудита 2026-05-26 (см. ниже): §2.1-2.6 формулы «было/стало», §2.7 acceptance numerical example на 7 субтестах, §3 решения по дискуссионным вопросам, §4 изменения по 13 слоям, §5 backwards-compat (IPC additive), §6 Verify (10 пунктов вкл. manual cross-validation ATR Δ<2%), §7 14 этапов реализации, §8 риски/анти-паттерны.
+- Ключевые решения: deque(maxlen=86400) вместо SQLite для spread history (проще); backend cap для session_vol_ratio — нет, только UI 99+×; warm-up gate 3 obs/hour для intraday profile; IPC ключи snapshot не переименовываем (Surgical).
+- Реализация — отдельной сессией по §7 чек-листу. Атомарный PR со всеми фиксами + acceptance + vault capture.
+
+### Аудит Analytics: 4 системных бага в данных snapshot
+
+- Пользователь подтвердил, что Analytics впервые заработал после fix'ов 2026-05-22, попросил верификацию через внешние независимые источники истины. Начали с ручной сверки ATR на XAUUSD.N через MT5-indicator: три расхождения (D1 +4.24%, H1 **+48.67%**, M5 +13.37%) на трёх TF → пользователь перешёл к полному аудиту кода.
+- Метод — параллельно три Agent-сессии: (1) Indicators — формулы ATR/ADX/ER/BBW/Hurst/Parkinson/GK/RV; (2) Sessions/Spread/Regime — корни аномалии «Vol vs hour-baseline = 11573.39×»; (3) Buffers/Pipeline — статус M15 buffer + UI-маппинг «ATR/PD M15» (прочерк).
+- **Найдено 4 P0 системных бага:**
+  - **#1 Stale buffers.** `manager.py:653-697` обновляет только primary TF. M15/H1/D1 буферы заморожены с момента `_backfill()`. Объясняет ATR H1 +48.67%, ADX/BBW/Parkinson/GK/RV «стейл».
+  - **#2 Backfill включает формирующийся бар.** `fetcher.py:92` использует `copy_rates_from_pos(..., 0, N)` (должно быть `1` как в `detect_bar_close`). Wilder seed ATR отравлен. Объясняет ATR M5 +13.37%.
+  - **#3 `session_vol_ratio` сломана.** `volatility.py:94` делит ATR в цене на |log-return| (размерностное несоответствие). Сверка: 15.12 / 0.0013 ≈ 11630 ≈ наблюдаемое 11573.39 в виджете.
+  - **#4 Spread block: 3 ложных метрики.** «Median 24h» = mean при окне ~2h (`snapshot_builder.py:399`); «Swap today» = хардкод 0 (`snapshot_builder.py:406`); «Ticks/sec» = poll rate, не tick rate.
+- **P1 находки:** «ATR/PD M15 = —» это by-design (ratio, требует registered StrategyContext); regime hysteresis работает на snapshot-ticks вместо bar-closes.
+- **Не баг:** CHAOS режим — корректный fallback; Sessions Active формула корректна; M15 fix 2026-05-22 живёт без регрессии.
+- Сводка: 4 системных бага влияют на 13+ из ~20 параметров UI. Полная таблица — в [[2026-05-26]] и в auto-memory `reference_analytics_audit_2026_05_26`.
+- [[auragrid-incidents-log]] — новая запись «2026-05-26 — Аудит Analytics» сверху с конкретными `path:line` для каждого бага.
+- [[auragrid-analytics-module]] — блок «Аудит 2026-05-26» в TL;DR + раздел «Что обнаружено» (Surgical по ADR-001: история unblock 2026-05-22 не переписана, аудит — отдельная добавка).
+- Auto-memory: новый указатель `reference_analytics_audit_2026_05_26` с приоритезированным реестром, существующий `reference_analytics_module` обновлён («unblock закрыт, но обнаружены 4 P0»).
+
+---
+
 ## 2026-05-25
+
+### Аудит AuraImpulse v1.0 — независимая верификация реализации (5-я сессия)
+
+- Пользователь поручил «полную проверку» отчёта о реализации 4-й сессии. Поднял отдельным сеансом для независимого взгляда.
+- Метод — сверка отчёта с кодом по 12 направлениям §9 ТЗ + явный прогон 84 impulse-тестов (зелёные) + `pytest --collect-only` (1272 теста — точное совпадение с заявленными 1253+1+16+2) + `cargo check` (8 pre-existing, 0 новых) + `npm run build` (bundle 722.31 kB).
+- **Вердикт:** реализация полностью соответствует отчёту, серьёзных дефектов не найдено. Все fast-path заявления подтверждены кодом: pre-fill SL в pending request, точный SLTP после fill, `_save_if_dirty` гард, trail БЕЗ `spread_buffer`, gap-handling. Backward-compat AuraGrid соблюдён, vault PHASE 3 в стиле ADR-001.
+- Найдены 4 мелкие неточности в самом отчёте (не баги в коде): число тестов 79→84 (отчёт занижает), pre-flight 10→9 в Step3EditorImpulse (нет `spread_buffer >= 0`), невыделенный default `magic_number=20260002` в `GeneralImpulseConfig`, не указанная template-природа `impulse_default.yaml`.
+- Список из **13 рекомендаций** (3 критичных перед раздачей пользователю + 5 средних + 5 низких) — детально в [[2026-05-25]] раздел «Аудит» и в auto-memory `reference_impulse_audit_2026_05_25`. Критичные: R1 — воспроизвести 1253 passed в чистой среде с сохранением лога; R2 — manual QA по `docs/qa/scenarios/impulse_lifecycle.md` на fake-MT5; R3 — pre-flight `tauri build --bundles msi` на dev-машине.
+- [[auragrid-incidents-log]] — добавлен «След решения 2026-05-25 (аудит)» сверху, формат не-инцидента (как у TRAIL_REWORK ADR-002).
+- Auto-memory — указатель `reference_impulse_audit_2026_05_25` (приоритезированный список 13 рекомендаций).
+
+### AuraImpulse — полная реализация v1.0 (Python ядро + Rust + UI)
+
+- Четвёртая сессия дня, реализация по `auragrid/docs/tz/TZ_IMPULSE_STRATEGY_v1.0.md` (11 этапов). Главный приоритет пользователя — **скорость работы для максимизации прибыли при импульсах** — зафиксирован двумя fast-path решениями: двойная отправка SL (pre-fill SL в request pending'а + точный modify после fill — окно беззащитности 0 на gap'ах) и `_dirty`-флаг для пропуска SQLite UPSERT на тиках без изменений.
+- Python pydantic: расширен `BotConfig` discriminator-полем `strategy_type: Literal["auragrid"] = "auragrid"` (backward-compat для пресетов до TZ_IMPULSE); создан параллельный `AuraImpulseBotConfig` с `GeneralImpulseConfig` (4 поля, `min_account_balance` вместо `max_loss`) и `ImpulseConfig` (9 полей). `load_config`/`load_preset_file` диспатчат на правильный класс по `strategy_type` в yaml-dict (без discriminated union — простой и минимально-инвазивный для существующих тестов).
+- Python state: dataclass `ImpulseState` в `python/bot/models/impulse_state.py`, SQLite таблица `impulse_state` (id=1, idempotent CREATE) + `save_/load_impulse_state` в `StateStore`. Cooldown переживает рестарт (wall clock `time.time()`), persistence-test закрепляет это.
+- Python engine: `ImpulseEngine` в `python/bot/core/impulse.py` — FSM `WATCHING → TRADING → COOLDOWN → WATCHING`, сквозные guard'ы `stopped` и `min_account_balance` (по equity), gap-сценарий (две позиции на одном тике — оставить раннюю по time_msc, закрыть позднюю market), orphan adopt / stale clear при `start()`. IPC handlers: `manual_pause/manual_pause_all/manual_close_channel/manual_close_all/reset_stopped`.
+- Engine dispatch: `main.py::build_engine` и `build_wiring` выбирают `ImpulseEngine` либо `Engine` по `isinstance(config, AuraImpulseBotConfig)`. `Wiring.engine` теперь `Any` (полиморфно). `_make_snapshot`, `_on_reconnect`, `start_wiring::paused_reset`, `Protection` создание — обёрнуты `isinstance`-проверками.
+- IPC: добавлен метод `reset_stopped` в `KNOWN_METHODS`. `handle_pause_channel/pause_strategy/close_channel/close_all/get_status/get_snapshot` диспатчат на `ImpulseEngine` (polymorphism). Для AuraImpulse: `get_status.max_loss_hit = state.stopped` (унифицированный UX-сигнал), `get_snapshot` возвращает Impulse-shape (`strategy_type`, `mode`, `pending`, `position`, `cooldown_seconds_remaining`, `stopped`, `paused_buy/sell`, `account`).
+- Rust `desktop/src-tauri/src/strategies.rs`: добавлено поле `strategy_type: String` в `StrategyEntry` (serde default = `"auragrid"` — backward-compat). Новый built-in template `presets/impulse_default.yaml`. Функции `create_impulse(...)`, `override_config_impulse(...)`, `known_impulse_presets()`. `clone_strategy` сохраняет type источника. `export_preset/import_preset` поддерживают секцию `impulse`. Tauri-команды `strategies_create_impulse` + `strategies_known_impulse_presets` зарегистрированы в `invoke_handler!`. `cargo check` — 8 pre-existing warnings, новых нет.
+- UI React: `StrategyMeta.strategy_type?: "auragrid" | "auraimpulse"` (optional, default через serde). `Step2CreateStrategy` — Radio для выбора type перед формой (read-only после создания), `useEffect` перегружает список пресетов при смене type. Создан `Step3EditorImpulse.tsx` (13 полей, pre-flight инварианты совпадают с pydantic-валидаторами). `WizardShell` и `StrategyPanel` модалка edit — dispatch на `Step3EditorImpulse` по `strategy_type`. Бейдж `[AuraImpulse]` (Mantine Text c="grape") в шапке Strategy panel и в Editor. `npm run build` — без ошибок.
+- Тесты: новые файлы — `test_impulse_config.py` (35 тестов pydantic + discriminator + extra="forbid" симметрично), `test_impulse_state_persistence.py` (9 тестов SQLite + cooldown survives restart), `test_impulse_engine.py` (22 unit-теста FSM, trail, gap, stopped, reset, snapshot), `test_impulse_acceptance.py` (3 теста — numeric example §2.9 для BUY + SELL зеркально + двойная отправка SL), `test_impulse_ipc.py` (10 тестов polymorphism handlers), `integration/test_impulse_lifecycle.py` (5 lifecycle тестов через `build_engine`). Полный pytest: **1253 passed, 1 skipped, 16 xfailed, 2 xpassed**. Регрессии AuraGrid — 0.
+- Документация: создан `docs/qa/scenarios/impulse_lifecycle.md` (manual QA по §2.9 + anti-checklist 5 потенциальных багов). `AGENTS.md` — параграф о том что AuraImpulse не имеет MQL5-предка.
+- vault: концепция [[auragrid-impulse-strategy]] и [[adr-003-impulse-strategy-new-preset-type]] обновлять не пришлось — реализация полностью соответствует ТЗ §4 (state machine, формулы, 13 полей, gap-обработка, двойная отправка SL — TZ §2.6 «принять решение в реализации» — выбрано двойная отправка как соответствующее приоритету скорости).
+
+### AuraImpulse — концепция новой стратегии замёрзла + методология сохранена в vault
+
+- Третья сессия дня. Продакт-владелец сформулировал новую стратегию `AuraImpulse` — single-shot breakout без сетки, мартингейла и CG-фазы. Четыре раунда уточнений до замёрзшей концепции (13 полей vs 38 у AuraGrid).
+- Создана [[auragrid-impulse-strategy]] — концептуальная wiki: state machine (Watching / Trading / Cooldown), формулы (единая формула трейл-SL без фазы активации, переиспользует TZ TRAIL_REWORK v1.0), каталог 13 настроек (4 в `general` включая `min_account_balance`; 9 в новой секции `impulse`), сравнение с AuraGrid (что заимствуется, что нет), численный пример «трейл стартует на первом тике если `sl_distance_pts > trail_size_profit + trail_update_distance_profit`», open questions для v2.
+- Создан [[adr-003-impulse-strategy-new-preset-type]] — Status: accepted. Решение: импульс реализуется как отдельный preset-type (`strategy_type: "auragrid" | "auraimpulse"` в yaml, default `"auragrid"` для backward-compat). Три отвергнутые альтернативы (режим внутри стратегии, отдельный репо). Migration plan: добавление optional поля без bump `config_version`, существующие пресеты — `"auragrid"` по умолчанию.
+- [[auragrid]] MOC — ссылки на [[auragrid-impulse-strategy]] и [[adr-003-impulse-strategy-new-preset-type]] в «Связано с», `Trading core` строка дополнена `(+ Impulse — будущее)`.
+- [[index]] — ссылки в «Компоненты AuraGrid» и «ADR».
+- Реализационное ТЗ `auragrid/docs/tz/TZ_IMPULSE_STRATEGY_v1.0.md` создано в репо проекта (структура как у TZ_TRAIL_REWORK_v1.0).
+- Auto-memory — указатель `reference_impulse_strategy` добавлен.
+- Реализация в коде — **не начата**, ждёт отдельной сессии. Концепция замёрзла, ТЗ написан.
+
+### MSI uninstall с опцией очистки %APPDATA%\GridScalp\
+
+- Реализована возможность при деинсталляции поставить галочку «также удалить все мои данные и настройки». Галочка показывается в самом приложении (Settings → «Опасная зона» → «Удалить программу»), потому что стандартный uninstall через «Программы и компоненты» в Tauri/WiX MSI идёт с basic UI без диалогов.
+- Создана [[auragrid-msi-uninstall-cleanup]] — концептуальная страница с UX-сценариями, инвариантами, потоком событий и анти-паттернами.
+- В auragrid-репо:
+  - `desktop/src-tauri/installer/cleanup.wxs` — WiX-фрагмент: `Property DELETE_USER_DATA` (default `0`, Secure), `CustomAction GridScalpRemoveUserData` (deferred + impersonate, PowerShell `Remove-Item -Recurse -Force`), `InstallExecuteSequence` с условием `REMOVE="ALL" AND DELETE_USER_DATA="1"`, обёртка в `ComponentGroup` для линкера.
+  - `desktop/src-tauri/tauri.conf.json` — `bundle.windows.wix.fragmentPaths` + `componentGroupRefs: ["GridScalpUserDataCleanup"]`.
+  - `desktop/src-tauri/src/uninstall.rs` — новый mod: поиск ProductCode по фиксированному UpgradeCode через `WindowsInstaller.Installer.RelatedProducts` (PowerShell COM, без новых крейтов); Tauri-команда `request_uninstall(delete_user_data)` спавнит `msiexec /x` с флагами `CREATE_NO_WINDOW | DETACHED_PROCESS`.
+  - `desktop/src-tauri/src/lib.rs` — `mod uninstall;` + регистрация команды.
+  - `desktop/src/components/SettingsModal.tsx` — кнопка «Удалить программу» + вложенный confirm-Modal с Checkbox + красный Alert при выбранной галочке; после invoke — `setTimeout 500 ms → window.close()` чтобы msiexec не наткнулся на Files in Use.
+- [[auragrid]] MOC — ссылка добавлена в «Связано с»; frontmatter updated → 2026-05-25.
+- [[index]] — ссылка добавлена в раздел «Операционные знания AuraGrid».
+- Verify: `cargo check` ✅ (8 pre-existing warnings, ни одной новой); `npm run build` (tsc + vite) ✅. Полная `tauri build --bundles msi` не запускалась — требует WiX 3.x на хосте сборщика.
+- Default — данные сохраняются. Чистка только при явном согласии пользователя через in-app галочку или CLI `msiexec /x ... DELETE_USER_DATA=1`. ARP-uninstall через «Программы и компоненты» — оставляет данные (намеренно, защита от случайного удаления при reinstall).
+- Auto-memory — указатель `reference_msi_uninstall_cleanup` добавлен.
+- Journal — [[2026-05-25]] (раздел дополнен).
 
 ### TZ TRAIL_REWORK v1.0 — переработка логики трейлинга (атомарный PR)
 

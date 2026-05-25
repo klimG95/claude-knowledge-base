@@ -1,0 +1,229 @@
+---
+type: concept
+tags: [auragrid, trading, strategy, impulse, breakout, design]
+component: bot.core (новая стратегия impulse)
+layer: domain
+shape: concept
+created: 2026-05-25
+updated: 2026-05-25
+implementation_status: "v1.0 implemented (1253 pytest passed, cargo+npm build OK)"
+---
+
+# AuraGrid — Impulse Strategy (концептуальная)
+
+**TL;DR.** Новая отличная от AuraGrid торговая стратегия — `AuraImpulse`. Реализуется как **отдельный preset-type** в той же кодовой базе. Чистая breakout-импульсная модель: один pending stop на каждом разрешённом канале, на дистанции `first_step` от цены; периодическое перевыставление под актуальную цену; при срабатывании оппозитный pending снимается, открывается одна позиция со стартовым SL; дальше работает единая формула трейлинга (без отдельной фазы активации). После закрытия — настраиваемая пауза, затем цикл повторяется. Без сетки, без мартингейла, без CG-фазы, без индикаторов.
+
+> Эта страница — **дизайн-документ**. Концепция замёрзла 2026-05-25; реализация v1.0 завершена в той же дате (4-я сессия) — полное соответствие state machine, формулам, 13 полям, gap-обработке. Внутрипроектное ТЗ: `auragrid/docs/tz/TZ_IMPULSE_STRATEGY_v1.0.md`. Архитектурное решение: [[adr-003-impulse-strategy-new-preset-type]].
+>
+> **Состояние реализации (2026-05-25):** Python ядро `python/bot/core/impulse.py` (~660 строк), state `python/bot/models/impulse_state.py`, persistence `python/bot/state/persistence.py` + schema. Engine dispatch в `main.py::build_engine` через `isinstance(config, AuraImpulseBotConfig)`. IPC: `handle_pause_channel/pause_strategy/close_channel/close_all/get_status/get_snapshot/reset_stopped` диспатчат на ImpulseEngine. Rust strategies.rs: `create_impulse` + serde-совместимое поле `strategy_type` в `StrategyEntry`. UI: Step2 Radio для выбора type + Step3EditorImpulse (9 pre-flight инвариантов) + бейдж `[AuraImpulse]`. Тесты: **84 impulse-теста** (полный pytest 1253 passed + collect-only 1272 в аудите). Manual QA: `docs/qa/scenarios/impulse_lifecycle.md`. **Fast-path решение** для приоритета пользователя «скорость»: двойная отправка SL (pre-fill SL в pending'е + точный modify после fill — окно беззащитности на gap'е = 0; TZ §2.6 «принять в реализации» — выбрана двойная отправка). **Аудит 5-й сессии 2026-05-25** ([[auragrid-incidents-log]] «След решения 2026-05-25», auto-memory `reference_impulse_audit_2026_05_25`) — дефектов нет, 13 рекомендаций (R1-R3 критичны перед раздачей MSI).
+
+## Когда читать эту страницу
+
+- Перед чтением `TZ_IMPULSE_STRATEGY_v1.0.md` (страница — концептуальный контекст ТЗ)
+- При вопросах «почему impulse сделан отдельной стратегией, а не режимом» → [[adr-003-impulse-strategy-new-preset-type]]
+- Перед расширением impulse-стратегии новыми параметрами или фильтрами (велосити, расписание, etc.)
+
+## Концепция
+
+### State machine (одна на стратегию, не два независимых канала)
+
+```
+            ┌──────────────────────────────────────────┐
+            │  State A — Watching (нет позиции)        │
+            │                                          │
+            │  Для каждого разрешённого канала:        │
+            │    • держим один pending stop            │
+            │      на дистанции first_step от цены     │
+            │    • раз в pending_refresh_sec           │
+            │      modify под актуальную цену          │
+            └──────────────┬───────────────────────────┘
+                           │ цена дотянулась до pending
+                           │ (BUY_STOP или SELL_STOP)
+                           ▼
+            ┌──────────────────────────────────────────┐
+            │  Переход (один тик):                     │
+            │    1. зафиксировать позицию              │
+            │    2. снять оппозитный pending           │
+            │    3. SL = entry ± sl_distance_pts·point │
+            └──────────────┬───────────────────────────┘
+                           │
+                           ▼
+            ┌──────────────────────────────────────────┐
+            │  State B — Trading (одна позиция)        │
+            │                                          │
+            │    • никаких pending                     │
+            │    • единая формула трейл-SL             │
+            │      (см. §«Формула трейлинга»)          │
+            │    • защита: min_account_balance         │
+            │      по equity на каждом тике            │
+            └──────────────┬───────────────────────────┘
+                           │ закрытие (SL/ручной/min_balance)
+                           ▼
+            ┌──────────────────────────────────────────┐
+            │  Cooldown (cooldown_sec)                 │
+            │    • не выставляем pending               │
+            │    • не открываем позиции                │
+            │    cooldown_sec = 0 → пропускаем          │
+            └──────────────┬───────────────────────────┘
+                           │ таймер истёк
+                           └─→ возврат в State A
+```
+
+### Ключевые отличия от AuraGrid
+
+| | AuraGrid (scalp + CG) | AuraImpulse |
+|---|---|---|
+| Концепция | Грид + мартингейл + переход в CG | Single-shot breakout с трейлингом |
+| Каналы | Два независимых state | Один общий state (один pending активен → второй снимается) |
+| Позиций одновременно | До `max_scalp_orders + cg.max_orders` | Ровно **одна** |
+| Pending | Цепочка доборов (scalp + CG trail) | Один pending на канал, периодический modify |
+| Лот | Мартингейл от позиции к позиции | Один `lot_size` без масштабирования |
+| Стоп-лосс | Только трейл-SL после активации по USD | Стартовый SL **с момента входа** + единая формула трейла |
+| Активация трейла | Отдельная фаза по `profit_fixing_direction` (USD) | Активации как фазы **нет** — единая формула с момента входа |
+| Защита equity | `max_loss` (относительный убыток USD) | `min_account_balance` (абсолютный порог equity USD) |
+| Cooldown между сделками | Нет | `cooldown_sec` после любого закрытия |
+| Зависимость от MQL5-эталона | Порт MQL5 (с отходами) | Полностью новая логика, нет MQL5-предка |
+
+## Каталог настроек
+
+Полный набор — **13 полей** (vs 38 у AuraGrid). Имена, типы, валидации — финальные после концептуальной сессии 2026-05-25.
+
+### `general` (4 поля)
+
+| # | Поле | Тип | Назначение |
+|---|------|-----|------------|
+| 1 | `allow_buy` | bool | Разрешить BUY_STOP pending. Если `False` — этот канал не участвует в State A |
+| 2 | `allow_sell` | bool | Аналогично для SELL_STOP |
+| 3 | `magic_number` | int (>0) | Уникальный ID стратегии, read-only после создания (как в AuraGrid) |
+| 4 | `min_account_balance` | float (>0) | Порог equity счёта в USD. При `equity ≤ min_account_balance` стратегия останавливается: закрыть открытую позицию по рынку, снять все pending, выставить флаг `stopped` до ручного перезапуска. UI label: «Минимальный баланс счёта (USD)» (под капотом — `account_info().equity`, как и `max_loss` в AuraGrid) |
+
+### `impulse` (9 полей, новая секция)
+
+| # | Поле | Тип | Назначение |
+|---|------|-----|------------|
+| 5 | `lot_size` | float (>0) | Размер позиции (семантика зависит от `lot_type`) |
+| 6 | `lot_type` | "fixed"\|"dynamic" | Заимствовано из AuraGrid. `fixed`: ровно `lot_size`. `dynamic`: % свободной маржи |
+| 7 | `spread_buffer` | int (≥0) | Защита от расширения спреда. При широком спреде pending не модифицируется и не выставляется (как `check_spread_normal` в AuraGrid) |
+| 8 | `first_step` | int (>0) | Дистанция pending stop от текущей цены (pts). Это и есть «фильтр импульсности»: большой `first_step` ловит только резкие движения, малый — почти любое касание |
+| 9 | `pending_refresh_sec` | int (≥1) | Интервал перевыставления pending в State A (sec). Защита `≥1` от спама `TRADE_ACTION_MODIFY` |
+| 10 | `sl_distance_pts` | int (>0) | Расстояние стартового SL от **цены входа** (pts). SL выставляется сразу при заполнении ордера |
+| 11 | `cooldown_sec` | int (≥0) | Пауза после **любого** закрытия позиции перед возвратом в State A (sec). `0` = выкл (сразу новый цикл) |
+| 12 | `trail_size_profit` | int (>0) | Удалённость SL от цены при трейлинге (pts). Заимствовано из AuraGrid с той же семантикой (TZ TRAIL_REWORK v1.0) |
+| 13 | `trail_update_distance_profit` | int (>0) | Частота подтяжки SL (pts). Заимствовано из AuraGrid с той же семантикой |
+
+### Что НЕ заимствуется из AuraGrid (с обоснованием)
+
+- Вся секция `conservative_grid` — нет фазы после-скальпа.
+- `price_distance`, `step_multiplier`, `min_grid_step` — нет сетки.
+- `max_scalp_orders`, `max_scalp_loss` — нет режимных переходов.
+- `martingale_coeff`, `increase_lot_size`, `max_lot_size` — один трейд за раз.
+- `trail_size`, `trail_update_distance` (pending-трейл) — pending не трейлится в смысле AuraGrid; он **периодически перевыставляется** по новой цене (механизм проще).
+- `profit_fixing_direction`, `auto_calculated_profit` — активации как фазы нет; стартовый SL + единая формула.
+- `max_loss` (relative USD) — заменён на `min_account_balance` (absolute equity USD).
+
+## Формула трейлинга (единая, без фазы активации)
+
+Стартовый SL выставляется в момент заполнения pending. После этого на каждом тике применяется одна формула — та же, что у AuraGrid profit-трейлинга после активации (TZ TRAIL_REWORK v1.0):
+
+**BUY:**
+```
+Стартовый SL = entry_price − sl_distance_pts · point   (в момент заполнения)
+
+На каждом тике:
+    dist = (bid − SL) / point
+    если dist > trail_size_profit + trail_update_distance_profit:
+        новый_SL = bid − trail_size_profit · point
+        (если новый_SL > старый_SL — modify; иначе игнор, SL никогда не вниз)
+```
+
+**SELL:** зеркально (`ask + sl_distance_pts·point`, движение в минус по цене = плюс по PL).
+
+**Инварианты:**
+- SL никогда не двигается в сторону убытка (BUY — никогда вниз, SELL — никогда вверх).
+- `effective_distance = max(trail_size_profit, broker_stops_level)` — поправка под минимальный стоп брокера (как `adjusted_stops` в AuraGrid).
+- Поправка `spread_buffer` применяется как в AuraGrid: фактическая дистанция SL = `max(trail_size_profit + spread_buffer, stops_level)`.
+
+### Тонкость: когда трейл стартует на первом тике
+
+Если `sl_distance_pts > trail_size_profit + trail_update_distance_profit` → условие формулы выполнено уже в момент входа → SL подтянется ближе к цене **на следующем тике без плюсового движения**.
+
+**Числовой пример** (BUY XAUUSD, point=0.01):
+- entry = 2000.00, sl_distance_pts = 200 → стартовый SL = 1998.00
+- trail_size_profit = 50, trail_update_distance_profit = 30 → порог = 80
+- На входе: dist = (2000.00 − 1998.00)/0.01 = 200 > 80 → условие выполнено сразу
+- Следующий тик (даже без движения цены): новый SL = 2000.00 − 50·0.01 = 1999.50
+
+Это **не баг формулы — это её следствие**, зафиксированное продакт-владельцем как корректное поведение. Если хочется отложить подтяжку SL до плюсового движения — настраивать `sl_distance_pts ≤ trail_size_profit + trail_update_distance_profit`.
+
+## Защита equity (`min_account_balance`)
+
+На каждом тике (в начале `on_tick`, аналог `protection.check_max_loss` AuraGrid):
+```
+if account_info().equity ≤ min_account_balance:
+    закрыть открытую позицию (если есть) по рынку
+    снять все pending (если есть)
+    state.stopped = True   # флаг до ручного перезапуска
+    log.warning("impulse_min_balance_hit", equity=..., threshold=...)
+    return  # дальнейший on_tick пропущен
+```
+
+После триггера стратегия не возобновляется автоматически (как `max_loss_hit` в AuraGrid). Пользователь снимает флаг через UI «Перезапустить стратегию».
+
+## Cooldown после закрытия
+
+Закрытие может произойти по трём причинам:
+1. Брокер триггернул SL (стартовый или подтянутый).
+2. Ручной close из UI (`Protection.arm_channel_trail` НЕ применяется — здесь логика проще, ручной close = немедленный physical close).
+3. Триггер `min_account_balance` — этот случай в cooldown **не идёт**, переход сразу в `stopped`.
+
+При (1) или (2):
+```
+state.cooldown_until = now() + cooldown_sec
+```
+В State A на каждом тике: `if now() < cooldown_until: return` (не выставляем pending, не модифицируем).
+При `cooldown_sec == 0` — `cooldown_until` не сетится, переход в State A немедленный.
+
+## Архитектурно: отдельный preset-type
+
+Решение зафиксировано в [[adr-003-impulse-strategy-new-preset-type]]. Краткое обоснование:
+
+- AuraGrid и AuraImpulse — концептуально разные стратегии (grid+martingale vs single-shot breakout), а не «два режима одной стратегии».
+- Один тип = один набор полей в pydantic и Step3Editor; не приходится таскать неприменимые поля и плодить дыры в валидации.
+- В UI: при создании стратегии (Wizard) пользователь выбирает type → дальше идёт type-specific Step3Editor.
+- На уровне engine: новый под-движок `Impulse` (~аналог Scalping/CG, но проще — нет фазовых переходов).
+- На уровне yaml: новый ключ верхнего уровня `strategy_type: "auragrid" | "auraimpulse"` (default — `auragrid` для совместимости). Для impulse-стратегий yaml содержит секцию `impulse` вместо `scalping` + `conservative_grid`.
+
+Детали реализации (структура engine, pydantic-схема, UI-flow) — в `auragrid/docs/tz/TZ_IMPULSE_STRATEGY_v1.0.md`.
+
+## Анти-паттерны (на этапе дизайна)
+
+1. **Не пытаться переиспользовать `ChannelState` AuraGrid целиком.** Поля `grid_count`, `last_lot_raw`, `current_step`, `pending_ticket` (одно поле под цепочку доборов) — это про сетку, не нужны impulse. Чистая `ImpulseState` с полями: `mode: WATCHING|TRADING|STOPPED`, `buy_pending_ticket`, `sell_pending_ticket`, `position_ticket`, `entry_price`, `trail_sl`, `cooldown_until`, `stopped`.
+2. **Не оставлять оппозитный pending живым после срабатывания.** Концептуальное решение — снять. Реализационно: в том же тике, что обработал позицию, удалить оппозитный pending через `TRADE_ACTION_REMOVE`. Если pending параллельно сработал на том же тике (теоретически возможно при двойном касании на гэпе) — закрыть его позицию немедленно (или вообще не открывать вторую: если первая уже зафиксирована, вторую отвергаем pre-flight). Edge-кейс детализируется в ТЗ §3.
+3. **Не путать «закрытие позиции» с «остановкой стратегии».** Закрытие → cooldown → новый цикл. Остановка (`min_account_balance`) → флаг `stopped` до ручного перезапуска.
+4. **Не выставлять стартовый SL ОТДЕЛЬНЫМ tick'ом после открытия.** SL должен быть в **том же** `order_send` через `sl=` поле request'а. Иначе между открытием и SL — окно беззащитности (одно из MQL5-best-practices).
+5. **Не считать `min_account_balance` по `account_info().balance`.** Balance не учитывает плавающий PL → триггер сработает только при закрытии позиции, защита запаздывает. Считать по `account_info().equity` — то же, что Аура делает с `max_loss` (floating PL).
+6. **Не разрешать `min_account_balance` нулевым или отрицательным.** Бессмысленно (счёт не может быть ≤0 в принципе). Field-валидатор `> 0`.
+
+## Open questions (для v2 / расширения)
+
+Сознательно вынесено за scope v1.0 (MVP):
+
+- **Фильтр скорости импульса.** Сейчас «импульс» = «цена дотянулась до далёкого pending». Если live-торговля покажет много псевдо-импульсов (медленный дрифт до pending) — добавить опциональный параметр «минимальное движение за окно» (например, `min_velocity_pts_per_sec`).
+- **Фильтр времени суток / сессий.** Может пригодиться (азиатская сессия — низкая волатильность, ловить импульсы хуже). v2 может добавить «торговать только в окно `HH:MM−HH:MM`».
+- **Страховочный SL до активации трейла.** Сейчас защита между входом и первой подтяжкой SL — только `sl_distance_pts` + `min_account_balance`. Если в проде это окажется недостаточным — добавить опциональный «break-even SL после N pts движения в плюс».
+- **Multi-symbol.** Сейчас один бот = один символ (как AuraGrid). Multi-symbol — отдельная задача, не связанная конкретно с impulse.
+
+## Связано с
+
+- [[adr-003-impulse-strategy-new-preset-type]] — решение об отдельном preset-type
+- [[auragrid]] — MOC проекта
+- [[auragrid-trading-core]] — для сравнения с архитектурой AuraGrid (engine, sub-engines, profit trailing)
+- [[auragrid-trading-settings]] — каталог настроек AuraGrid (для сравнения объёма и структуры)
+- [[adr-002-trail-rework-mq5-parity-departure]] — формула трейлинга, которая переиспользуется здесь
+- `auragrid/docs/tz/TZ_IMPULSE_STRATEGY_v1.0.md` — реализационное ТЗ (будет создан в этой же сессии)
+
+## Источник
+
+- Концептуальная сессия 2026-05-25 (третья за день) — обсуждение с продакт-владельцем, итоговый набор полей + state machine
+- TZ_TRAIL_REWORK v1.0 — формула трейлинга, переиспользуется
+- AuraGrid `python/bot/core/profit_trailing.py` — паттерн trailing SL для adopted-инвариантов
