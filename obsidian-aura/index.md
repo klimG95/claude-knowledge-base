@@ -28,7 +28,7 @@
 - [[auragrid-trading-core]] — торговое ядро (engine/protection/profit_trailing/risk)
 - [[auragrid-trading-settings]] — каталог торговых настроек пресета (36 параметров + валидации + UI)
 - [[auragrid-impulse-strategy]] — концепция новой стратегии `AuraImpulse` (отдельный preset-type, single-shot breakout, 13 полей)
-- [[auragrid-analytics-module]] — второй python-процесс (indicators/regime/levels/calendar/preset-eval), состояние на 2026-05-22 — частично сломан
+- [[auragrid-analytics-module]] — второй python-процесс (indicators/regime/levels/calendar/preset-eval); unblock 2026-05-22 + TZ_ANALYTICS_INTEGRITY 2026-05-26 закрыты, данные корректны
 
 ### Операционные знания AuraGrid
 
