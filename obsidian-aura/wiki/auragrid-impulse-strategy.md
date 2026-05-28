@@ -5,8 +5,8 @@ component: bot.core (новая стратегия impulse)
 layer: domain
 shape: concept
 created: 2026-05-25
-updated: 2026-05-25
-implementation_status: "v1.0 implemented (1253 pytest passed, cargo+npm build OK)"
+updated: 2026-05-28
+implementation_status: "v1.0 implemented (1253 pytest passed); 2026-05-28 cooldown UX + auto-cancel pendings on stop (1287 passed)"
 ---
 
 # AuraGrid — Impulse Strategy (концептуальная)
@@ -212,6 +212,25 @@ state.cooldown_until = now() + cooldown_sec
 - **Фильтр времени суток / сессий.** Может пригодиться (азиатская сессия — низкая волатильность, ловить импульсы хуже). v2 может добавить «торговать только в окно `HH:MM−HH:MM`».
 - **Страховочный SL до активации трейла.** Сейчас защита между входом и первой подтяжкой SL — только `sl_distance_pts` + `min_account_balance`. Если в проде это окажется недостаточным — добавить опциональный «break-even SL после N pts движения в плюс».
 - **Multi-symbol.** Сейчас один бот = один символ (как AuraGrid). Multi-symbol — отдельная задача, не связанная конкретно с impulse.
+
+## Доработка 2026-05-28 — cooldown UX + auto-cancel pendings on stop
+
+Пользователь обнаружил два UX-разрыва после реальной MSI-сборки:
+
+1. **Cooldown «висит навсегда».** После закрытия сделки `state.cooldown_until_ts` тикал, но UI не имел доступа: `Snapshot` interface (TypeScript) был AuraGrid-shape — поле `cooldown_seconds_remaining` из `ImpulseEngine.snapshot()` отбрасывалось. Метод `reset_cooldown` отсутствовал в `ImpulseEngine` (был только `reset_stopped` для halt после `min_account_balance`). Перезапуск/смена настроек cooldown не помогали — таймер хранится в SQLite и переживает рестарт.
+2. **Pending'и переживали остановку.** `ImpulseEngine.stop()` сохранял state и сбрасывал `running=False`, но pending'и (BUY_STOP/SELL_STOP) оставались в MT5. Без живого бота они могли сработать → позиция без двойной защиты SL/трейла → инвариант «ровно одна позиция + единая формула трейла» нарушался.
+
+**Решения:**
+
+- `python/bot/core/impulse.py::ImpulseEngine.reset_cooldown()` — обнуляет `state.cooldown_until_ts`, возвращает `True` если cooldown был активен (симметрично `reset_stopped` для halt). Логирует `impulse_cooldown_reset_by_user`.
+- `python/bot/core/impulse.py::ImpulseEngine.stop()` — перед `running=False` снимает оба pending'а через `_remove_pending`, обнуляет cache в state. Открытая позиция **не** закрывается (её SL уже в MT5 — поведение симметрично AuraGrid `stop()`, в UI пользователь предупреждён модалкой).
+- IPC: `reset_cooldown` добавлен в `KNOWN_METHODS` (`bot/ipc/protocol.py`) и `handle_reset_cooldown` в `bot/ipc/handlers.py` (для AuraGrid — no-op, ok=True).
+- Rust: `strategy_reset_cooldown` Tauri command (`desktop/src-tauri/src/lib.rs`).
+- UI: `Snapshot.cooldown_seconds_remaining?: number` (`desktop/src/store/strategies.ts`) + жёлтый Alert «Бот ждёт окончания паузы» с кнопкой «Снять с паузы» (`pages/Main/StrategyPanel.tsx`), рендерится только для импульса при `cooldown_seconds_remaining > 0` и не пересекается с red-Alert MaxLoss. В confirm-модалке Stop для импульса добавлено уведомление об авто-снятии pending'ов.
+
+**Тесты:** baseline 1278 → **1287 passed** (+9). Новые: 6 в `test_impulse_engine.py` (`test_reset_cooldown_unlocks_watching`, `test_reset_cooldown_returns_false_when_inactive`, `test_reset_cooldown_after_external_close`, `test_stop_removes_pending_orders`, `test_stop_keeps_open_position`, `test_stop_is_idempotent_when_nothing_pending`), 3 в `test_impulse_ipc.py` (`test_reset_cooldown_in_known_methods`, `test_reset_cooldown_clears_active_cooldown`, `test_reset_cooldown_noop_when_inactive`). cargo check Finished, npm run build OK.
+
+**Что НЕ изменилось:** концепция/state machine/13 полей/формула трейлинга/cooldown_sec из YAML/persistence schema — всё прежнее. Surgical правка по [[adr-001-surgical-minimal-vault-updates]].
 
 ## Связано с
 

@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-05-28
+
+### AuraImpulse: ручной сброс cooldown + auto-cancel pending'ов на stop()
+
+- Пользовательский баг-репорт после установки MSI 2026-05-28: после первой сделки таймер `cooldown_sec` зависает «навсегда» в восприятии пользователя — UI не показывает оставшееся время, а перезапуски/смена настроек cooldown не сбрасывают. Второй пункт: при остановке стратегии стоящие pending'и (BUY_STOP/SELL_STOP) остаются в MT5 и могут сработать без бота.
+- Корень #1 (cooldown): UI вообще не парсил impulse-snapshot (нет `cooldown_seconds_remaining` в `Snapshot` interface) и не было метода `reset_cooldown` в `ImpulseEngine`. Был только `reset_stopped` (для halt после `min_account_balance`) — пользователь видел кнопку «Сбросить блокировку» только при equity-halt'е.
+- Корень #2 (pending'и при stop): `ImpulseEngine.stop()` сохранял state и сбрасывал `running=False`, но pending'и в MT5 не трогал — без бота они могли сработать → позиция без двойной защиты SL/трейла.
+- Фиксы:
+  - `python/bot/core/impulse.py`: новый метод `ImpulseEngine.reset_cooldown()` (обнуляет `state.cooldown_until_ts`, симметрично существующему `reset_stopped`); расширен `stop()` для снятия обоих pending'ов перед `running=False` (открытая позиция остаётся — её SL уже в MT5, как и в AuraGrid).
+  - `python/bot/ipc/protocol.py` + `handlers.py`: новый IPC-метод `reset_cooldown` (по аналогии с `reset_stopped` — унифицированная UX-команда, для AuraGrid no-op).
+  - `desktop/src-tauri/src/lib.rs`: новый Tauri command `strategy_reset_cooldown`.
+  - `desktop/src/store/strategies.ts`: `Snapshot.cooldown_seconds_remaining?: number` (optional — у AuraGrid отсутствует).
+  - `desktop/src/pages/Main/StrategyPanel.tsx`: жёлтый Alert «Бот ждёт окончания паузы» с кнопкой «Снять с паузы» при `cooldown_seconds_remaining > 0` (только для импульса); пояснение в confirm-модалке Stop про авто-снятие pending'ов для импульса.
+- Тесты: 1287 passed (baseline 1278 + 9 новых — 6 в `test_impulse_engine.py` про `reset_cooldown` и `stop()`, 3 в `test_impulse_ipc.py` про IPC-метод). Регрессий 0. cargo check OK; npm run build OK.
+- Wiki: дополнен раздел реализации в [[auragrid-impulse-strategy]] (новый блок «Доработка 2026-05-28») — концепция/state machine без изменений, перечислены изменённые файлы.
+- journal [[2026-05-28]] — добавлен раздел «Вторая часть сессии: cooldown UX».
+
+### Релизный коммит AuraImpulse v1.0 + MSI uninstall (SHA `2c13f5b`)
+
+- Пользователь подтвердил: «Последняя версия ПО была удачной, установлена и проверена. Нужен коммит и пуш».
+- Атомарный релизный коммит `2c13f5b` (29 файлов, +5886 / −105) — объединяет две фичи 2-й и 4-й сессий 2026-05-25: AuraImpulse v1.0 + MSI uninstall с галочкой. `git push origin main`: `fb67723..2c13f5b` без конфликтов.
+- Решение делать один коммит, а не два по фичам: `desktop/src-tauri/src/lib.rs` смешивает обе фичи в одном hunk (mod uninstall + два impulse-handler'а + смешанный invoke_handler), hunk-level split болезненный из non-interactive bash, а пользователь проверил обе фичи совокупно установкой MSI — атомарная единица доставки.
+- Закрыто из [[reference_impulse_audit_2026_05_25]]: R3 (pre-flight MSI build не упал на новом коде) + R2 (manual smoke на dev-окружении пользователя подтверждает базовую работоспособность). R1 (clean-room 1253 passed) и R4-R13 остаются открытыми.
+- Wiki не трогали по ADR-001 Surgical: обе фичи уже полностью описаны в [[auragrid-impulse-strategy]] / [[adr-003-impulse-strategy-new-preset-type]] / [[auragrid-msi-uninstall-cleanup]]. Релизный коммит не добавляет нового знания.
+- journal [[2026-05-28]] создан.
+
+---
+
 ## 2026-05-26
 
 ### Реализация TZ_ANALYTICS_INTEGRITY_v1.0 — атомарный PR (третья фаза, SHA `fb67723`)
