@@ -2,7 +2,7 @@
 type: incident-log
 tags: [auragrid, incidents, operations]
 created: 2026-05-22
-updated: 2026-05-26
+updated: 2026-05-28
 ---
 
 # AuraGrid — Incidents log
@@ -13,6 +13,39 @@ updated: 2026-05-26
 - Запись делается в момент диагностики, не пост-фактум
 - Если инцидент → фикс закрыт коммитом, обязательно линковать SHA
 - Секция Prevention важнее остальных — это материал для будущих агентов
+
+---
+
+## 2026-05-28 — AuraImpulse adaptive distance: вечный warmup из-за пропущенного метода в MT5Connection
+
+**Status:** diagnosed + fixed в той же сессии.
+
+**Симптом (пользователь):** «Запустил тест на данном устройстве. По итогу прогрев ни к чему не приводит. Стратегия не стартует.»
+
+**Диагностика (5 минут):**
+1. `bot.log` для impulse-стратегии (magic 20260001, `%APPDATA%\GridScalp\logs\20260001\bot.log`):
+   ```
+   "event": "impulse_engine_started", "mode": "watching", ...
+   "event": "impulse_dynamic_distance_warmup", "reason": "no_copy_rates_api"
+   ```
+   `no_copy_rates_api` — это branch в `_refresh_dynamic_distance`: `getattr(self.deps.client, "copy_rates_from_pos", None) is None`.
+2. Проверка `bot/mt5/connection.py` (прод-клиент `MT5Connection`) — он явно делегирует только методы из `MT5Client` Protocol, существовавшие до этой сессии: `initialize`, `symbol_info`, `symbol_info_tick`, `positions_get`, `orders_get`, `order_send`, `order_check`, `history_deals_get`. **`copy_rates_from_pos` я добавил в Protocol + FakeMT5Client, но забыл прокинуть через `MT5Connection`.** Каждый тик `_refresh_dynamic_distance` фиксировал warmup → pending'и не выставлялись никогда.
+
+**Root cause:** dual implementation (FakeMT5Client для тестов + MT5Connection для прода) без compile-time проверки полноты Protocol на стороне MT5Connection. Тесты на impulse (108 passed) использовали fake, прод-клиент не покрывался → пропуск.
+
+**Resolution (коммит `0bab2c7`):**
+- `bot/mt5/connection.py::MT5Connection.copy_rates_from_pos` — добавлен метод, делегирует пакету `MetaTrader5` + нормализует результат. Реальный пакет возвращает `numpy structured array` (доступ через `r['time']`), нормализуем в `tuple[SimpleNamespace]` — engine работает единообразно на fake и проде.
+- Возвращаем `None` если результат пустой/None — engine трактует как warmup без падения.
+- Tests: 3 новых в `test_connection_and_main.py` — `test_copy_rates_from_pos_normalizes_numpy_structured_array` (мок numpy.void через класс с `__getitem__` без `.time`), `test_copy_rates_from_pos_returns_none_when_no_history`, `test_copy_rates_from_pos_returns_none_on_empty_result`. Полная impulse suite (108 тестов) — passed.
+
+**Prevention:**
+- **Каждое добавление метода в `MT5Client` Protocol — обязательно одновременно в `FakeMT5Client` И в `MT5Connection`.** Это два места, оба обязательные.
+- Идея: type-checker (mypy/pyright) с `runtime_checkable` Protocol на `MT5Client` мог бы поймать недостающие методы в `MT5Connection`. Но Python Protocol — структурный, mypy не требует explicit `class MT5Connection(MT5Client)`. Workaround — explicit assertion в тестах: `assert isinstance(MT5Connection(symbol="X"), MT5Client)` поймал бы недостающий метод (Protocol проверяет наличие, не сигнатуру).
+- Записать в [[feedback_external_api_defense]]? Уже похожий урок про hasattr-guard перед циклом — но это про другой кейс. Здесь — про **симметрию fake/prod при расширении интерфейса**. Достаточно фиксации здесь.
+
+**Связано с:**
+- Реализация adaptive distance: [[adr-004-impulse-adaptive-distance]] + [[auragrid-impulse-strategy]] раздел «Доработка 2026-05-28 (вторая)»
+- Коммит в `klimG95/auragrid` — `0bab2c7` (запушен в `origin/main`)
 
 ---
 

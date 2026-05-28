@@ -6,6 +6,17 @@
 
 ## 2026-05-28
 
+### Hotfix AuraImpulse adaptive distance: пропущенный метод в MT5Connection (SHA `0bab2c7`)
+
+- Пользователь после установки билда с ADR-004: «Прогрев ни к чему не приводит. Стратегия не стартует.»
+- Диагностика через `bot.log` (magic 20260001): `impulse_dynamic_distance_warmup reason=no_copy_rates_api` сразу после `impulse_engine_started`. Корень: `MT5Connection.copy_rates_from_pos` не существует — в ADR-004 коммите я добавил метод в `MT5Client` Protocol и в `FakeMT5Client` (тесты), но забыл в прод-обёртке `bot/mt5/connection.py`. `getattr(client, "copy_rates_from_pos", None) is None` → engine навсегда в warmup → нет pending'ов.
+- Сопутствующий gotcha: реальный пакет `MetaTrader5` возвращает `numpy structured array`, доступ через subscript (`r['time']`), а engine ожидает атрибуты (`bar.high`/`bar.low` — работает только для SimpleNamespace из fake). Фикс нормализует результат в `tuple[SimpleNamespace]` на границе с MT5 — engine работает единообразно.
+- Resolution: `MT5Connection.copy_rates_from_pos` добавлен + нормализация + 3 новых теста в `test_connection_and_main.py` (мок `numpy.void` через класс с `__getitem__` без атрибутов, тесты на None и empty). Полная impulse suite 108/108 passed + 11 connection passed. Коммит `0bab2c7` запушен в `klimG95/auragrid`.
+- [[auragrid-incidents-log]] — добавлен раздел 2026-05-28 с Resolution и Prevention («каждое добавление метода в MT5Client Protocol — одновременно в FakeMT5Client И в MT5Connection; Python Protocol структурный, mypy не ловит пропуск»).
+- journal [[2026-05-28]] — добавлен четвёртый раздел (Hotfix).
+- Wiki/ADR-004 не правил — концепция и архитектурное решение остались валидными, баг был чисто в реализации обёртки.
+- **Тестировщику:** нужна новая сборка MSI с этим фиксом, после установки запустить impulse заново. На первом тике engine получит исторические M1 свечи через `copy_rates_from_pos` → выйдет из warmup мгновенно (если терминал уже подтянул историю на нужную глубину).
+
 ### AuraImpulse: adaptive distance v1.0 (ADR-004) — first_step → candle_count + distance_coefficient
 
 - Пользовательский запрос после первой доработки cooldown UX: «Стратегия должна быть более гибкой и адаптивной к рынку. Две настройки — количество свечей и коэффициент дистанции (заменяет first_step). Дистанция = среднее (high-low) за N M1-свечей × коэффициент, пересчёт после закрытия каждой новой свечи. Также пол cooldown'а = candle_count минут. Приоритет — скорость.»
