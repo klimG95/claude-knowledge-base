@@ -42,6 +42,7 @@
 - [[adr-001-surgical-minimal-vault-updates]] — Surgical & minimal updates в vault'е (2026-05-24, accepted)
 - [[adr-002-trail-rework-mq5-parity-departure]] — Намеренный отход от MQL5-эталона в логике трейлинга, удаление `pending_order_offset`, config_version 1→2 (2026-05-25, accepted)
 - [[adr-003-impulse-strategy-new-preset-type]] — Импульсная стратегия как отдельный preset-type (`strategy_type: "auraimpulse"`), backward-compat default `"auragrid"` (2026-05-25, accepted)
+- [[adr-004-impulse-adaptive-distance]] — AuraImpulse адаптивная дистанция pending'а: `first_step` → `candle_count` + `distance_coefficient` (M1 high-low), cooldown floor, config_version 2→3 (2026-05-28, accepted)
 
 ## Источники
 

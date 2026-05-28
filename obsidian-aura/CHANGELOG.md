@@ -6,6 +6,17 @@
 
 ## 2026-05-28
 
+### AuraImpulse: adaptive distance v1.0 (ADR-004) — first_step → candle_count + distance_coefficient
+
+- Пользовательский запрос после первой доработки cooldown UX: «Стратегия должна быть более гибкой и адаптивной к рынку. Две настройки — количество свечей и коэффициент дистанции (заменяет first_step). Дистанция = среднее (high-low) за N M1-свечей × коэффициент, пересчёт после закрытия каждой новой свечи. Также пол cooldown'а = candle_count минут. Приоритет — скорость.»
+- Решение зафиксировано в [[adr-004-impulse-adaptive-distance]] (accepted): `impulse.first_step` удалён, добавлены `candle_count: int (≥1)` и `distance_coefficient: float (>0)`. Engine на каждой смене `last_bar_time` пересчитывает дистанцию через `copy_rates_from_pos(start_pos=1, count=N)` — start_pos=1 пропускает формирующуюся, берём только закрытые. Warmup-гейт: при истории < N pending'и не выставляются (и снимаются уже стоящие). Cooldown floor: `effective = max(cooldown_sec, candle_count*60)`. Snapshot обогащён 4 полями для UI (`current_first_step_pts`, `warmup`, `candle_count`, `distance_coefficient`).
+- Производительность: кэш по `bar_time` означает один `copy_rates` в минуту вместо на каждый тик. Скорость горячего пути не страдает.
+- `config_version` 2 → 3 (общий для AuraGrid и AuraImpulse; AuraGrid схема не менялась, но bump необходим). Bumped 14 yaml/templates/fixtures/test_data файлов + 2 Rust override-функции.
+- Файлы кода: `python/bot/models/config.py` (поля + bump + сообщение), `python/bot/core/impulse.py` (методы `_refresh_dynamic_distance` + `_enter_warmup`, обновлены `_arm_cooldown` / `_manage_pendings` / `_place_pending` / `_modify_pending` / `_make_pending_refresher` / `snapshot()`), `python/bot/mt5/protocol.py` (`TIMEFRAME_M1` + `copy_rates_from_pos`), `python/bot/mt5/fake.py` (`set_rates`/`append_rate`/`copy_rates_from_pos`), `desktop/src-tauri/src/strategies.rs`, `desktop/src-tauri/presets/impulse_default.yaml`, `desktop/src/store/strategies.ts`, `desktop/src/pages/Wizard/Step3EditorImpulse.tsx`, `desktop/src/pages/Main/StrategyPanel.tsx`.
+- Тесты: 1287 → **1302 passed** (+15: 13 в `test_impulse_engine.py` про адаптивную дистанцию/warmup/cooldown floor/bar-time кэш, 1 в `test_impulse_config.py` про rejection легаси `first_step`, +1 от обновления существующих). Регрессий 0. Существующие impulse тесты пересажены на `candle_count=1 + coef=1.0 + seeded avg_range=5.0` (эквивалент `first_step=500`). `test_impulse_full_lifecycle` перепроектирован под cooldown floor (cooldown=0 → factual cooldown=60 → ручной reset). cargo check Finished, npm run build OK (835 modules, 725 kB).
+- Wiki: создан [[adr-004-impulse-adaptive-distance]] (accepted) + добавлен раздел реализации в [[auragrid-impulse-strategy]] («Доработка 2026-05-28 (вторая)»). [[index]] синхронизирован.
+- journal [[2026-05-28]] — добавлен третий раздел про adaptive distance.
+
 ### AuraImpulse: ручной сброс cooldown + auto-cancel pending'ов на stop()
 
 - Пользовательский баг-репорт после установки MSI 2026-05-28: после первой сделки таймер `cooldown_sec` зависает «навсегда» в восприятии пользователя — UI не показывает оставшееся время, а перезапуски/смена настроек cooldown не сбрасывают. Второй пункт: при остановке стратегии стоящие pending'и (BUY_STOP/SELL_STOP) остаются в MT5 и могут сработать без бота.

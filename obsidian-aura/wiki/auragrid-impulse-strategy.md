@@ -6,7 +6,7 @@ layer: domain
 shape: concept
 created: 2026-05-25
 updated: 2026-05-28
-implementation_status: "v1.0 implemented (1253 pytest passed); 2026-05-28 cooldown UX + auto-cancel pendings on stop (1287 passed)"
+implementation_status: "v1.0 implemented (1253 pytest passed); 2026-05-28 cooldown UX + auto-cancel pendings on stop (1287 passed); 2026-05-28 adaptive distance v1.0 — first_step заменён на candle_count+distance_coefficient (1302 passed), config_version 2→3"
 ---
 
 # AuraGrid — Impulse Strategy (концептуальная)
@@ -232,9 +232,38 @@ state.cooldown_until = now() + cooldown_sec
 
 **Что НЕ изменилось:** концепция/state machine/13 полей/формула трейлинга/cooldown_sec из YAML/persistence schema — всё прежнее. Surgical правка по [[adr-001-surgical-minimal-vault-updates]].
 
+## Доработка 2026-05-28 (вторая) — Adaptive distance v1.0 (ADR-004)
+
+Пользователь после первой доработки cooldown UX: «Хочу чтобы дистанция pending'а считалась динамически от среднего размера M1-свеч, а не была статичной». Сценарий — стратегия должна сама подстраиваться под текущую волатильность XAUUSD, не требуя ручной правки `first_step` при смене характера рынка.
+
+**Решение (полные детали — [[adr-004-impulse-adaptive-distance]]):**
+
+- В `ImpulseConfig` поле `first_step: int` удалено, добавлены `candle_count: int (≥1)` и `distance_coefficient: float (>0)`. На каждой новой закрытой M1-свече engine считает `avg(high − low) для последних N свечей × coefficient`, делит на `point` → получает дистанцию в pts.
+- Если свечей в истории `< candle_count` (warmup после первого старта / длинного выходного) — pending'и не выставляются; уже стоящие — снимаются. UI показывает «прогрев — копим свечи».
+- Cooldown floor: `effective_cooldown = max(cooldown_sec, candle_count × 60)`. Между закрытием сделки и следующим расчётом дистанции гарантированно успевают накопиться свежие свечи, не унаследованные от движения, которое только что завершилось стопом. Пользовательский `cooldown_sec` уважается, если он больше пола.
+- Кэш по `bar_time`: copy_rates_from_pos дёргается раз в минуту (при смене времени свежей свечи), а не на каждом тике. Скорость горячего пути не страдает.
+- `config_version` 2 → 3 (общая для AuraGrid и AuraImpulse). Старые AuraImpulse-пресеты с `first_step` отвергаются с понятным сообщением.
+
+**Файлы:**
+- Python: `python/bot/models/config.py` (поля + bump), `python/bot/core/impulse.py` (метод `_refresh_dynamic_distance` + `_enter_warmup`, переписаны `_arm_cooldown` с floor + `_manage_pendings` с warmup-gate + `_place_pending`/`_modify_pending`/`_make_pending_refresher` берут дистанцию из кэша), `python/bot/mt5/protocol.py` (`TIMEFRAME_M1`, `copy_rates_from_pos` в Protocol), `python/bot/mt5/fake.py` (`set_rates`/`append_rate`/`copy_rates_from_pos` для тестов).
+- Rust: `desktop/src-tauri/src/strategies.rs` (config_version 3 в обоих override).
+- Preset: `desktop/src-tauri/presets/impulse_default.yaml` (candle_count: 7, distance_coefficient: 1.0).
+- UI: `desktop/src/store/strategies.ts` (snapshot: `current_first_step_pts`, `warmup`, `candle_count`, `distance_coefficient`), `desktop/src/pages/Wizard/Step3EditorImpulse.tsx` (два поля вместо одного + обновлены pre-flight), `desktop/src/pages/Main/StrategyPanel.tsx` (плашка «Дистанция pending'а сейчас: N pts» или «прогрев — копим свечи»).
+- Bump AuraGrid yaml/templates/fixtures с config_version: 2 → 3 (схема AuraGrid не менялась, но версия единая).
+
+**Тесты:** baseline 1287 → **1302 passed** (+15). Новые в `test_impulse_engine.py`: `test_dynamic_distance_calculated_on_first_tick`, `test_dynamic_distance_coefficient_doubles_distance`, `test_dynamic_distance_averages_multiple_candles`, `test_warmup_when_no_bars`, `test_warmup_when_insufficient_history`, `test_warmup_removes_existing_pendings`, `test_dynamic_distance_cached_until_new_bar`, `test_dynamic_distance_recalculated_on_new_bar`, `test_snapshot_exposes_dynamic_distance`, `test_snapshot_exposes_warmup`, `test_cooldown_floor_overrides_cooldown_sec_zero`, `test_cooldown_floor_with_larger_candle_count`, `test_cooldown_sec_overrides_floor_when_higher`. Существующие тесты пересажены на `candle_count=1 + distance_coefficient=1.0 + seeded avg_range=5.0` (эквивалент `first_step=500`). cargo check Finished, npm run build OK (835 modules, bundle 725 kB).
+
+**Тонкости реализации:**
+- `copy_rates_from_pos(symbol, TIMEFRAME_M1, 1, N)` — `start_pos=1` пропускает текущую формирующуюся свечу, берёт N ЗАКРЫТЫХ. Это критично — формирующаяся свеча имеет неполный range и зашумит среднее.
+- Кэш `_last_bar_time` сравнивает `bars[0].time` (newest closed bar) с сохранённым. Изменение → новая свеча закрылась → пересчёт. Это эквивалент event-based триггера «на закрытии M1», без подписки на тиковые события.
+- Защита от вырожденного случая `dist_pts <= 0` (нулевой range при стоящем рынке) → возврат в warmup до следующей свечи.
+- Pre-fill SL в pending request'е остаётся (TZ_IMPULSE §2.6 «двойная отправка SL»), пересчитывается под новую динамическую цену pending'а.
+- Поля snapshot'а `current_first_step_pts` + `warmup` + `candle_count` + `distance_coefficient` доступны для UI для визуализации текущего состояния расчёта.
+
 ## Связано с
 
 - [[adr-003-impulse-strategy-new-preset-type]] — решение об отдельном preset-type
+- [[adr-004-impulse-adaptive-distance]] — переход от статичного `first_step` к адаптивной дистанции (2026-05-28, accepted)
 - [[auragrid]] — MOC проекта
 - [[auragrid-trading-core]] — для сравнения с архитектурой AuraGrid (engine, sub-engines, profit trailing)
 - [[auragrid-trading-settings]] — каталог настроек AuraGrid (для сравнения объёма и структуры)
