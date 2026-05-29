@@ -30,7 +30,9 @@
 - **Ярус 0** `10887d4` — каркас метрик: `LatencyTracker`, `StateStore.write_count`, перф-поля в `poll_heartbeat` (`on_tick_p50/p99/max_ms`, `ticks_skipped`, `persist_writes`).
 - **Ярус 1** `658bdbe` — снят потолок ~20 тиков/сек + дедуп тиков `(time_msc,bid,ask)` со страховкой `forced_full_tick_sec`; `POLL_INTERVAL_SEC` 0.05→0.005.
 - **Ярус 2** `59503b1`+`aef0967`+`07c6f0a` — write-on-change персистентность + батч-транзакция; один `positions_get` на оба канала (`sync_both`) + кеш `account_info`; async лог-pump. Тюнинг ретраев executor осознанно отложён (риск надёжности закрытия в NO_PRICES → Ярус 3).
-- Полный pytest **1325 passed** / 0 failed. Семантика торговли не менялась. [[auragrid-performance-strategy]] → status in-progress (Ярусы 0–2 done); Ярус 3 (потоки) условный, Ярус 4 (UI) не начат. journal [[2026-05-30]] (4-я часть).
+- Полный pytest **1325 passed** / 0 failed. Семантика торговли не менялась. journal [[2026-05-30]] (4-я часть).
+- **Ярус 4 (UI)** `cc9453f` — `createTrailingThrottle` + троттлинг `analytics_tick` 10Гц→~5Гц в `useAnalyticsSubscription`. Аудит переоценил UI: стор не растёт, мост не флудит, badge не каскадит — реальная цель одна. vitest 28 passed, tsc чисто. journal (5-я часть).
+- **Ярус 3 (потоки) — gated/deferred** (решение): после 0–2 `on_tick` ~1–3мс, «замерзание окна» устранено; остаток (executor-retry sleeps при NO_PRICES) маржинален, а concurrency-рефактор реал-мани кода нельзя верифицировать без живого MT5 → не шипуем вслепую, ждём живые метрики. Приоритет «сохранить работоспособность».
 
 ### Стратегия максимального ускорения AuraGrid
 
