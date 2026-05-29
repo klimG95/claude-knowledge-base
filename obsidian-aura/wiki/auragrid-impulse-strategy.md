@@ -5,7 +5,7 @@ component: bot.core (новая стратегия impulse)
 layer: domain
 shape: concept
 created: 2026-05-25
-updated: 2026-05-28
+updated: 2026-05-29
 implementation_status: "v1.0 implemented (1253 pytest passed); 2026-05-28 cooldown UX + auto-cancel pendings on stop (1287 passed); 2026-05-28 adaptive distance v1.0 — first_step заменён на candle_count+distance_coefficient (1302 passed), config_version 2→3"
 ---
 
@@ -259,6 +259,14 @@ state.cooldown_until = now() + cooldown_sec
 - Защита от вырожденного случая `dist_pts <= 0` (нулевой range при стоящем рынке) → возврат в warmup до следующей свечи.
 - Pre-fill SL в pending request'е остаётся (TZ_IMPULSE §2.6 «двойная отправка SL»), пересчитывается под новую динамическую цену pending'а.
 - Поля snapshot'а `current_first_step_pts` + `warmup` + `candle_count` + `distance_coefficient` доступны для UI для визуализации текущего состояния расчёта.
+
+## Пробелы логирования (для анализа постфактум)
+
+Зафиксировано при анализе bot.log magic 20260001 от 2026-05-29 (2 сделки 29 мая UTC) на вопрос «какой был спред в моменты сделок»:
+
+- **Спред в trade-events не пишется.** Поле `spread` есть только в событии `impulse_spread_too_wide` ([impulse.py:706](https://github.com/klimG95/auragrid/blob/main/python/bot/core/impulse.py#L706)) — оно срабатывает лишь при **отбое** широкого спреда (pending не выставлен/не модифицирован). В нормальной торговле — `impulse_pending_placed`, `impulse_position_opened`, `impulse_initial_sl_set`, `impulse_trail_updated` — спред не сохраняется. Восстановить пост-фактум невозможно: fill происходит на стороне брокера, бот не делает snapshot spread'а в тот тик.
+- **Что можно вытащить из текущих логов:** время и `entry` сделки (`impulse_position_opened`), стартовый SL (`impulse_initial_sl_set`), все шаги трейла (`impulse_trail_updated` с `old_sl`/`new_sl`/`dist_pts`), факт закрытия (`impulse_position_closed_external`).
+- **Если нужна реальная картина спреда** — доработать: добавить `spread_pts = int(round((ask − bid) / point))` в `impulse_position_opened` (на момент fill'а), `impulse_pending_placed`/`impulse_pending_modify_attempt` (на момент посыла в MT5). Симметрично для AuraGrid — отдельная задача.
 
 ## Связано с
 
