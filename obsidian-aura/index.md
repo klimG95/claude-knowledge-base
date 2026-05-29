@@ -35,6 +35,7 @@
 - [[auragrid-incidents-log]] — журнал инцидентов проекта
 - [[auragrid-log-analysis]] — методология анализа логов desktop.log / bot.log
 - [[auragrid-checkpoint-2026-05-22-analytics-unblocked]] — **большой чекпоинт** для отката, первый стабильный вариант за долгое время
+- [[auragrid-checkpoint-2026-05-30-pre-restructure]] — **чекпоинт перед перестройкой** (база отката под performance-рефакторинг), все слои зелёные, HEAD `461904b`
 - [[auragrid-msi-uninstall-cleanup]] — деинсталляция с опциональной очисткой `%APPDATA%\GridScalp\` (WiX fragment + Tauri command + UI checkbox)
 
 ### Производительность AuraGrid

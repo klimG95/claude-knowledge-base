@@ -91,7 +91,7 @@ status: proposed
 - Каждый ярус — отдельная ветка с полным pytest (baseline 1306 passed) + ручной прогон на волатильной сессии.
 - Дедуп не отключает защиту: при неизменной цене просадка/`max_loss` не меняются → пропуск безопасен; периодические проверки по таймеру.
 - Write-behind: гарантированный flush при shutdown и важных переходах; recovery опирается на сверку с MT5 на старте.
-- База отката: checkpoint `checkpoint/2026-05-22-analytics-unblocked` (см. [[auragrid-checkpoint-2026-05-22-analytics-unblocked]]).
+- База отката: checkpoint `checkpoint/2026-05-30-pre-restructure` (см. [[auragrid-checkpoint-2026-05-30-pre-restructure]]) — свежий baseline, созданный именно перед этим рефакторингом (HEAD `461904b`, все слои зелёные, pytest 1306). Более глубокий fallback — [[auragrid-checkpoint-2026-05-22-analytics-unblocked]].
 
 ## Рекомендованный порядок и оценка
 
