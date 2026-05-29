@@ -4,7 +4,26 @@
 
 ---
 
+## 2026-05-30
+
+### Стратегия максимального ускорения AuraGrid
+
+- Пользователь: софт рабочий, но на ультраволатильном рынке зависания/лаги — подготовить стратегию ускорения с сохранением полной работоспособности.
+- Параллельный аудит 4 слоёв (hot path / MT5+IPC / analytics+logging / Tauri+React) + верификация в коде ([main.py:431-512](auragrid/python/bot/main.py#L431-L512)).
+- Диагноз 2 фронтов: (1) потолок ~20 тиков/сек из-за `sleep(50мс)` + работа по устаревшим тикам; (2) торговый цикл и IPC на одном event loop → блокировки в `on_tick` (SQLite/тик, MT5-вызовы, executor `sleep 0.2с×3`, `flush()` логов) морозят UI. Аналитика (отдельный процесс) не виновата.
+- Создана wiki [[auragrid-performance-strategy]] (plan-hub, proposed): 5 ярусов (0 измерение → 1 потолок → 2 блокировки → 3 работа/тик → 4 UI) + инварианты безопасности.
+- [[index]] (новая область «Производительность»), [[auragrid]] MOC (ссылка + `updated`), auto-memory `reference_performance_strategy`, journal [[2026-05-30]].
+- Реализация не начата — ждёт согласования (рекомендован порядок 0→1→2).
+
 ## 2026-05-29
+
+### Объяснение расчёта дистанции pending'а AuraImpulse по первоисточнику
+
+- Пользователь: «Как происходит расчёт дистанции ордера в импульс стратегии. Выясни точечно в коде и объясни на примере».
+- Точечный walk-through кода с привязкой к строкам: [`_refresh_dynamic_distance` impulse.py:452-544](auragrid/python/bot/core/impulse.py#L452-L544), [`_place_pending` 770-780](auragrid/python/bot/core/impulse.py#L770-L780), [`get_adjusted_stops_level` validation.py:13-49](auragrid/python/bot/utils/validation.py#L13-L49), кэш через `_last_bar_time` ([505-506](auragrid/python/bot/core/impulse.py#L505-L506)), warmup-гейт ([716-724](auragrid/python/bot/core/impulse.py#L716-L724)), cooldown floor ([433-446](auragrid/python/bot/core/impulse.py#L433-L446)). Числовой пример на XAUUSD (`candle_count=7`, `coef=1.0`, ask=2000.00) → BUY_STOP 2002.43.
+- Сверка с wiki: алгоритм в [[auragrid-impulse-strategy]] и [[adr-004-impulse-adaptive-distance]] идентичен коду — расхождений нет.
+- journal [[2026-05-29]] — дополнен вторым разделом «Объяснение расчёта дистанции pending'а».
+- Wiki/auto-memory не правились (surgical по [[adr-001-surgical-minimal-vault-updates]] — алгоритм уже задокументирован).
 
 ### Анализ логов AuraImpulse: пробел в логировании спреда
 

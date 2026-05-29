@@ -37,6 +37,10 @@
 - [[auragrid-checkpoint-2026-05-22-analytics-unblocked]] — **большой чекпоинт** для отката, первый стабильный вариант за долгое время
 - [[auragrid-msi-uninstall-cleanup]] — деинсталляция с опциональной очисткой `%APPDATA%\GridScalp\` (WiX fragment + Tauri command + UI checkbox)
 
+### Производительность AuraGrid
+
+- [[auragrid-performance-strategy]] — стратегия ускорения (зависания/лаги на ультраволатильном рынке): диагноз 2 фронтов + 5 ярусов, status proposed
+
 ## ADR
 
 - [[adr-001-surgical-minimal-vault-updates]] — Surgical & minimal updates в vault'е (2026-05-24, accepted)
