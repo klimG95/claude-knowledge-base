@@ -6,6 +6,15 @@
 
 ## 2026-05-30
 
+### ТЗ полного ребрендинга GridScalp → Aura (pre-sales)
+
+- Пользователь: перед продажами полностью сменить нейминг проекта на бренд **Aura** («закрыть гештальт»), полный пакет дизайна сделать через Claude design; просил написать ТЗ + инструкцию по подготовке набора для интеграции. Доп.: «дизайн сразу и на перспективу» (приложение будет хорошеть).
+- Разведка масштаба: **715 вхождений `GridScalp`/`gridscalp` в 171 файле**. Текущее: продукт `GridScalp Bot`, identifier `com.gridscalp.bot`, publisher `GridScalp`, `%APPDATA%\GridScalp\`, env `GRIDSCALP_DATA_DIR`, npm `gridscalp-desktop`, docker project `gridscalp`/`gridscalp_net`. Параллельно уже жили стратегии `AuraGrid`/`AuraImpulse`.
+- Решения владельца (AskUserQuestion): имя продукта = **Aura** (одно слово); стратегии → нейтральные **Grid**/**Impulse** (в UI); пакет дизайна = лого+иконка / цветовая система+UI-тема / арт MSI / лендинг; визуальное направление = **2 концепта на сравнение** (Тёмная премиум-финтех + Aura glow).
+- Ключевой инсайт ТЗ: нейминг на **3 слоях** с разной ценой — (A) display-строки меняем свободно; (B) OS/install-идентификаторы = ломающая миграция (делаем pre-sales, новый identifier+upgradeCode+`%APPDATA%\Aura`); (C) data-контракт `strategy_type: "auragrid"/"auraimpulse"` в yaml **НЕ трогаем** (ADR-001 surgical), меняем только UI-ярлык.
+- Создано: `auragrid/docs/tz/TZ_AURA_REBRAND_v1.0.md` (карта переименований по слоям/файлам, фазовый план 0-5, критерии приёмки, риски/откат), `auragrid/docs/brand/AURA_DESIGN_BRIEF_v1.0.md` (бриф под Claude design: 2 концепта + asset manifest с точными форматами/размерами + дизайн-токены на перспективу).
+- Реализация не начата — ждёт готовых дизайн-ассетов. Откат — tag `checkpoint/2026-05-30-pre-restructure` (auragrid `461904b`).
+
 ### Чекпоинт перед перестройкой — `checkpoint/2026-05-30-pre-restructure`
 
 - Пользователь: «планируются комплексные изменения и перестройки, подготовить почву + предварительный коммит с пушем; последняя версия полностью работоспособна». «Почва» под performance-рефакторинг [[auragrid-performance-strategy]].
@@ -14,6 +23,14 @@
 - Попутно: устаревший локальный `.venv` (не хватало `aiogram` + `python-multipart`) — доустановил; дефекта в репо нет (см. раздел «Замечание по окружению» в чекпоинт-странице).
 - Тег `checkpoint/2026-05-30-pre-restructure` в обоих репо (auragrid `461904b` + claude-knowledge-base), запушены.
 - Создана [[auragrid-checkpoint-2026-05-30-pre-restructure]]; обновлена база отката в [[auragrid-performance-strategy]]; [[index]] (Операционные знания); auto-memory `reference_checkpoint_2026_05_30`; journal [[2026-05-30]] (3-я часть). До-зафиксирована незакоммиченная PHASE 3 прошлых сессий (perf-план).
+
+### Реализация ускорения AuraGrid — Ярусы 0–2 (безопасное ядро)
+
+- Пользователь: «приступай». Ветка `perf/acceleration-tiers` (от `checkpoint/2026-05-30-pre-restructure`, 461904b), запушена + PR.
+- **Ярус 0** `10887d4` — каркас метрик: `LatencyTracker`, `StateStore.write_count`, перф-поля в `poll_heartbeat` (`on_tick_p50/p99/max_ms`, `ticks_skipped`, `persist_writes`).
+- **Ярус 1** `658bdbe` — снят потолок ~20 тиков/сек + дедуп тиков `(time_msc,bid,ask)` со страховкой `forced_full_tick_sec`; `POLL_INTERVAL_SEC` 0.05→0.005.
+- **Ярус 2** `59503b1`+`aef0967`+`07c6f0a` — write-on-change персистентность + батч-транзакция; один `positions_get` на оба канала (`sync_both`) + кеш `account_info`; async лог-pump. Тюнинг ретраев executor осознанно отложён (риск надёжности закрытия в NO_PRICES → Ярус 3).
+- Полный pytest **1325 passed** / 0 failed. Семантика торговли не менялась. [[auragrid-performance-strategy]] → status in-progress (Ярусы 0–2 done); Ярус 3 (потоки) условный, Ярус 4 (UI) не начат. journal [[2026-05-30]] (4-я часть).
 
 ### Стратегия максимального ускорения AuraGrid
 

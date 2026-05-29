@@ -6,7 +6,7 @@ layer: cross-cutting
 shape: plan-hub
 created: 2026-05-30
 updated: 2026-05-30
-status: proposed
+status: in-progress
 ---
 
 # AuraGrid — Стратегия ускорения (performance)
@@ -103,13 +103,24 @@ status: proposed
 
 ## Статус ярусов
 
+Реализация 2026-05-30 на ветке `perf/acceleration-tiers` (от checkpoint
+`checkpoint/2026-05-30-pre-restructure`, 461904b). Полный pytest 1325 passed.
+
 | Ярус | Статус | Коммит/дата |
 |---|---|---|
-| 0 — измерительный каркас | proposed | — |
-| 1 — потолок пропускной способности | proposed | — |
-| 2 — разблокировать горячий путь (1 поток) | proposed | — |
-| 3 — расцепление потоков (условный) | proposed (gated) | — |
+| 0 — измерительный каркас | **done** | `10887d4` (2026-05-30) |
+| 1 — потолок пропускной способности | **done** | `658bdbe` (2026-05-30) |
+| 2 — разблокировать горячий путь (1 поток) | **done** | `59503b1`+`aef0967`+`07c6f0a` |
+| 3 — расцепление потоков (условный) | proposed (gated) | — (ждёт замеров на живом рынке) |
 | 4 — интерфейс | proposed | — |
+
+### Что сделано в Ярусе 2 (3 коммита)
+- **2a** `59503b1` — write-on-change персистентность каналов (вместо timer-based: строго безопаснее — каждое изменение пишется немедленно) + батч обоих каналов одной транзакцией. AuraImpulse уже был на write-behind (`_dirty`).
+- **2b** `aef0967` — один `positions_get` на оба канала (`scanner.sync_both`/`scan_all`) + кеш `account_info` (TTL 1с).
+- **2c** `07c6f0a` — async лог-pump (фоновый писатель, off-thread write+flush) + `flush_logging`/`shutdown_logging`. Тюнинг ретраев executor **сознательно отложен** (укорачивание окна `NO_PRICES` рискует надёжностью закрытия ордеров; правильное место — Ярус 3 off-thread).
+
+### Метрики Яруса 0 (для валидации эффекта на живом рынке)
+`poll_heartbeat` теперь несёт: `on_tick_p50_ms`/`p99`/`max`, `ticks_skipped`, `persist_writes`. Ожидаемо после 1–2: `ticks_skipped` > 0 (дедуп), `persist_writes`/сек ↓ в разы (write-on-change), `on_tick` p99 ↓ (меньше MT5/SQLite на тик). `StateStore.write_count` — счётчик записей.
 
 ## Связано с
 
