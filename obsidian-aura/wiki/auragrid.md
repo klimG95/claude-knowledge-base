@@ -5,6 +5,8 @@ created: 2026-05-22
 updated: 2026-05-30
 ---
 
+> **TL;DR 2026-05-30 (защита):** добавлена [[auragrid-protection-strategy]] — план защиты ПО перед первой продажей (status proposed). Главная дыра: `bot/*.py` в MSI открытым текстом → кража IP + тривиальный взлом лицензии. Ворота продажи = подпись MSI + strip `.py` + PyArmor с привязкой к лицензии.
+
 > **TL;DR обновление 2026-05-25 (4-я сессия):** AuraImpulse v1.0 полностью реализована — Python ядро (`python/bot/core/impulse.py`), Engine dispatch (`main.py::build_engine`), IPC handlers, Rust strategies.rs, UI Wizard + Editor + бейджи. Полный pytest 1253 passed, cargo check OK, npm build OK. Manual QA — `docs/qa/scenarios/impulse_lifecycle.md`. Концепция [[auragrid-impulse-strategy]] и ADR-003 без изменений (реализация им полностью соответствует).
 
 # AuraGrid — MOC
@@ -41,6 +43,7 @@ updated: 2026-05-30
 - [[adr-003-impulse-strategy-new-preset-type]] — архитектурное решение об отдельном `strategy_type`
 - [[auragrid-msi-uninstall-cleanup]] — деинсталляция MSI с опциональной очисткой `%APPDATA%\GridScalp\` (in-app галочка)
 - [[auragrid-performance-strategy]] — стратегия ускорения (зависания/лаги на ультраволатильном рынке): 2 фронта + 5 ярусов
+- [[auragrid-protection-strategy]] — защита ПО перед первой продажей (анти-копирование/взлом/tamper): threat-модель + 6 фаз, ворота продажи Ф1–3
 - [[methodology-overview]] — общая методология vault'а
 
 ## Источник

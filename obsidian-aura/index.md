@@ -42,6 +42,10 @@
 
 - [[auragrid-performance-strategy]] — стратегия ускорения (зависания/лаги на ультраволатильном рынке): диагноз 2 фронтов + 5 ярусов, status proposed
 
+## Защита и релиз AuraGrid
+
+- [[auragrid-protection-strategy]] — защита ПО перед первой продажей (анти-копирование/анти-взлом/tamper): threat-модель + 6 фаз, status proposed, ворота продажи = Ф1–3
+
 ## ADR
 
 - [[adr-001-surgical-minimal-vault-updates]] — Surgical & minimal updates в vault'е (2026-05-24, accepted)

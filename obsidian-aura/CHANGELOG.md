@@ -6,6 +6,21 @@
 
 ## 2026-05-30
 
+### Реализация защиты Ф2 + Ф6 (ветка protect/anti-piracy, PR #36)
+
+- Пользователь: «приступать, подпись пропустим (сложности)». Ветка `protect/anti-piracy` от sellable-baseline `rebrand/aura`.
+- **Ф2 done** `e7d22fa` — strip `.py` → sourceless `.pyc` в `sync-bot-embed.ps1 -StripSources` (а не prepare-embed — sync-bot перекопирует bot/ на каждой сборке); `build-release.ps1` стрипает prod по умолчанию. Verify: 105 .py → 105 .pyc на реальном embed, smoke-embed зелёный, data-файлы целы.
+- **Ф3 deferred** (выбор владельца через AskUserQuestion: PyArmor требует покупки лицензии). Но совместимость проверена эмпирически: обфусцированные pydantic-модели импортируются в embed 3.12.7, интроспекция цела, рантайм грузится. Pipeline — после покупки.
+- **Ф6 done (server)** `8f5dc5a` — аудит: контур зрелый. Закрыты 2 пробела: floor `JWT_SECRET_KEY` 8→32 (анти-форджери HS256) + warning-лог шеринга на `max_devices_exceeded`. Серверный набор 236 passed.
+- Обновлены: [[auragrid-protection-strategy]] (реестр статусов + лог реализации), auto-memory. Открыто: Ф1 подпись + Ф3 PyArmor (procurement), EULA/signed-updater.
+
+### Стратегия защиты ПО перед первой продажей (plan)
+
+- Пользователь: «Финально подготовить ПО к первой продаже — защитить от взлома, копирования и пр. Разработать последовательный план. Главное — сохранить функциональность и скорость».
+- Аудит кода (licensing/client.py, hwid.py, bot_process.rs, tauri.conf.json, prepare-embed.ps1, sign-windows.ps1, main.py:509-529). Диагноз: лицензионный контур зрелый, но `bot/*.py` едут в MSI открытым текстом → кража IP + тривиальный взлом лицензии (патч client-side `is_valid`/halt); MSI не подписан (HO-0002).
+- Создана [[auragrid-protection-strategy]] (plan-hub, status proposed): threat-модель T1-T5, инварианты (zero hot-path cost, полный pytest против защищённой сборки, 6h grace), 6 фаз. Ворота первой продажи = Ф1 подпись MSI/exe + Ф2 strip `.py` (pyc-only) + Ф3 PyArmor с привязкой к лицензии. Ф4 Cython core / Ф5 server runtime-gating — gated. Тех-решение PyArmor>Nuitka обосновано стеком MetaTrader5+numpy/pandas/scipy.
+- Связи: [[index]] (новая область «Защита и релиз»), [[auragrid]] MOC (TL;DR + Связано с), auto-memory `reference_protection_strategy`. Реализация не начата — ждёт «начинай».
+
 ### Реализация ребрендинга GridScalp → Aura (ветка rebrand/aura)
 
 - Пользователь: «Готово, папка Aura design/ … продумай последовательный план ребрендинга и можно приступать». Дизайн пришёл полным комплектом (violet glow, знак «Candle Peak», Sora + JetBrains Mono, токены, лого, иконка-мастер, лендинг).
