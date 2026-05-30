@@ -6,6 +6,21 @@
 
 ## 2026-05-30
 
+### Реализация ребрендинга GridScalp → Aura (ветка rebrand/aura)
+
+- Пользователь: «Готово, папка Aura design/ … продумай последовательный план ребрендинга и можно приступать». Дизайн пришёл полным комплектом (violet glow, знак «Candle Peak», Sora + JetBrains Mono, токены, лого, иконка-мастер, лендинг).
+- Ветка `rebrand/aura` от `perf/acceleration-tiers` (cc9453f) — решение ветвить от свежего зелёного baseline, т.к. продаваемая сборка хочет и perf, и ребренд (а не от голого main). Откат — `461904b`.
+- **Фаза 1** tauri.conf.json вручную: identifier `com.gridscalp.bot`→`com.aura.app`, новый upgradeCode `B7A6258B-7151-493B-9151-385ECC02FE34`, productName/title→Aura.
+- **Фаза 2** массовая perl-замена по 617 отобранным tracked-файлам (исключены docs/archive, docs/reports, mql5, Cargo.lock, python-embed, **свои ребренд-доки**): `com.gridscalp.bot→com.aura.app` → `GridScalp Bot→Aura` → `GridScalp→Aura` → `GRIDSCALP→AURA` → `gridscalp→aura`. 157 файлов, 647 правок, 0 остатка.
+- **Фаза 3** UI-ярлыки хирургически: `AuraGrid→Grid`, `AuraImpulse→Impulse` (StrategyPanel badge, Step2 labels, Step3 badge). Литералы `strategy_type` и Python-класс `AuraImpulseBotConfig` (в комментариях) НЕ тронуты.
+- **Фаза 4** дизайн: `tauri icon` из мастера 1024×1024 (мобильные iOS/Android удалены), Mantine-тема primary `aura` `#7A3FFF` dark-first + шрифты Sora/JetBrains Mono через @fontsource (offline, CSP-совместимо), ассеты в `docs/brand/assets/`.
+- **Фаза 5** верификация зелёная: tsc OK · vitest 28 · **pytest 1325 passed** · cargo check exit 0. Commit `f538658`.
+- **Добивка под чистовую машину** (пользователь: «сборка не нужна — отдельный специалист; решить вопросы с сервером и тд»):
+  - Commit `58339cc`: переключатель темы dark/light (☀/☾ в шапке, useMantineColorScheme) + арт MSI (PNG→24-bit BMP через .NET System.Drawing, banner 493×58 + dialog 493×312, подключены в tauri.conf wix).
+  - Commit `51e287f`: серверная часть. Проверено — домен/имя БД/JWT берутся из host `.env` или содержат `auragrid` (не `gridscalp`), массовая замена их не задела → контракт клиент↔сервер цел, активация на чистовой машине работает против живого `api.auragrid.org`. Единственный реальный риск — осиротевшая БД лицензий при смене docker-проекта `gridscalp→aura` (тома `<project>_<volume>`). Закрыт runbook'ом `docs/ops/AURA_REBRAND_DEPLOY.md` (backup→copy `gridscalp_*`→`aura_*`→deploy с сохранением `.env`→verify→rollback) + предупреждением в compose.
+  - Живой VPS-деплой НЕ выполнялся (нет нужды для теста + риск для работающего сервера лицензий) — отдельный плановый шаг по runbook'у. Сборка MSI — на специалисте.
+- Не пушено — ждёт решения пользователя (push/PR).
+
 ### ТЗ полного ребрендинга GridScalp → Aura (pre-sales)
 
 - Пользователь: перед продажами полностью сменить нейминг проекта на бренд **Aura** («закрыть гештальт»), полный пакет дизайна сделать через Claude design; просил написать ТЗ + инструкцию по подготовке набора для интеграции. Доп.: «дизайн сразу и на перспективу» (приложение будет хорошеть).
