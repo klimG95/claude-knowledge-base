@@ -2,7 +2,7 @@
 type: incident-log
 tags: [auragrid, incidents, operations]
 created: 2026-05-22
-updated: 2026-05-28
+updated: 2026-06-04
 ---
 
 # AuraGrid — Incidents log
@@ -13,6 +13,44 @@ updated: 2026-05-28
 - Запись делается в момент диагностики, не пост-фактум
 - Если инцидент → фикс закрыт коммитом, обязательно линковать SHA
 - Секция Prevention важнее остальных — это материал для будущих агентов
+
+---
+
+## 2026-06-04 — AuraImpulse: «фантомные сделки / неработающие SL / не закрытие по кнопке» на живом XAU (3 латентных бага)
+
+**Status:** diagnosed + fixed (коммит `62694f3`, PR #36). **Требует demo-валидации** (order-execution фиксы; fake-MT5 не воспроизводит брокер).
+
+**Симптом (пользователь):** «После сборки и установки новой версии — множество багов: фантомные сделки, неработающие стоплосы, не закрытие по кнопке и др. Нужно чтобы софт работал с защитой.» Подразумевалось подозрение на защиту (Фаза 2/6).
+
+**Диагностика по живым логам** (`%APPDATA%\Aura\logs\`, magic-дирами: `20260001`=Grid, `20260002`=Impulse; 06-02…06-04):
+1. **Grid здоров** (`profit_trail_sl_set`, `channel_reset_after_close`, `ingest_ok`) — баги только в Impulse.
+2. Частоты Impulse за 2 дня: `impulse_pending_modify_failed` 3261, `trade_retries_exhausted` 3261, `trade_retry` 6522. Распределение retcode: **10018 (market closed) ×9783**, 10016 (invalid stops) ×2, 10029 ×3.
+3. `poll_heartbeat`: `on_tick_p50_ms` 0.47 (норма после perf), но **p99 253-333мс, max 464-513мс** — петля замирала.
+4. **git blame:** `impulse.py`/`executor.py`/`validation.py` не менялись после checkpoint `461904b` (только rebrand-нейминг `f538658`). → **защита и perf-рефакторинг НЕВИНОВНЫ**; баги латентные, в самой стратегии Impulse, проявились на волатильном XAU у DooTechnology.
+
+**Root cause (3 бага):**
+- **Bug B (доминанта):** `TRADE_RETCODE_MARKET_CLOSED` (10018) был в `_RETRYABLE` ([executor.py]). Дневной перерыв сессии XAU → каждый pending-modify ретраился 3×0.2с = **0.6с заморозки event loop**, ×9783. Это «окно не отвечает / кнопка закрытия не срабатывает / хаотичные ордера». Закрытый рынок не откроется за 0.6с — ретрай бессмысленен.
+- **Bug A:** refined initial SL отвергался брокером с 10016 «Invalid stops» (дистанция от ТЕКУЩЕЙ цены внутри freeze-level на волатильности, хотя от entry = `sl_distance_pts`). Позиция НЕ без защиты (pending открывается с pre-fill SL, шире — `_place_pending` sl=`sl_distance+PRE_FILL_SL_BUFFER`), но `state.initial_sl/trail_sl` всё равно писались в проваленное желаемое → trail считал от несуществующего уровня, его modify'и тоже отклонялись.
+- **Bug C:** сервер отвергал telemetry `mode="IMPULSE"` (Pydantic `ModeName=Literal["SCALP","CG"]` + колонка `String(5)`) → 422, **вся телеметрия Impulse дропалась** (`ingest_4xx_drop`).
+
+**Resolution (`62694f3`):**
+- Bug B: `MARKET_CLOSED` убран из `_RETRYABLE` ([executor.py]); движок повторит операцию на следующих тиках при открытии рынка. `NO_PRICES` остаётся retryable (транзиентный, важен для закрытия). Тест `test_market_closed_returns_immediately_without_retry_sleep`.
+- Bug A: при отказе set'а держим `state` согласованным с фактическим брокерским SL (`effective_sl = current_sl`); лог `position_unprotected` если SL==0 ([impulse.py::_on_position_opened]). Тест `test_initial_sl_set_failure_keeps_state_consistent_with_broker`.
+- Bug C: `ModeName += "IMPULSE"`, колонка `String(16)`, миграция `0007_impulse_mode` (Postgres ALTER, SQLite no-op — длина не enforced; MV от `mode` не зависит). Тест `test_ingest_accepts_impulse_mode`.
+- Попутно: `tests/integration/conftest.py` `JWT_SECRET_KEY`→≥32 — **регрессия Фазы 6** (floor 8→32 валил 11 integration + 12 admin_bot errors; пропущена, т.к. после Фазы 6 прогонялся только server-набор, не полный bot).
+- Verify: bot **1328 passed**, server **237 passed**, 0 fail/err.
+
+**Prevention:**
+- **MARKET_CLOSED ≠ retryable.** Ретраить устойчивые состояния (рынок закрыт, торговля запрещена по символу) — антипаттерн: морозит loop без шанса на успех. Retryable = только транзиентные (REQUOTE, NO_PRICES). Пересмотреть и `TRADE_DISABLED`/`NO_MONEY` в `_RETRYABLE` при следующем заходе — тоже сомнительны.
+- **fake-MT5 не воспроизводит брокер.** stops_level/freeze-level/session XAU у DooTechnology — источник 10016/10018. pytest зелёный ≠ корректность на живом рынке. **Любой order-execution фикс → обязательная demo-валидация** перед боевым. См. [[auragrid-performance-strategy]] инвариант про живой MT5.
+- **При смене серверного контракта (floor/Literal/длина колонки) — прогонять ПОЛНЫЙ bot-набор, не только server.** Bot integration-тесты (`tests/integration/`) спинят серверный `Settings`/app и ловят такие регрессии; server-набор их не покрывает. Урок: коммит Фазы 6 заявил «python/bot не затронут» — неверно.
+- **Симптом ≠ причина:** «после новой версии» → подозрение на последнее изменение (защита), но git blame показал, что торговый код не менялся. Всегда сверять blame затронутого кода с baseline, а не доверять корреляции по времени.
+
+**Связано с:**
+- [[auragrid-impulse-strategy]] — стратегия; [[adr-004-impulse-adaptive-distance]] — adaptive pending (источник modify-цикла)
+- [[auragrid-protection-strategy]] — защита (доказано: невиновна в этом инциденте)
+- [[auragrid-log-analysis]] — методология (magic-диры, retcode-распределение, poll_heartbeat)
+- Коммит `62694f3` (PR #36, ветка `protect/anti-piracy`)
 
 ---
 

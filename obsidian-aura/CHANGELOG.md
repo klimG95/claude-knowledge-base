@@ -4,6 +4,15 @@
 
 ---
 
+## 2026-06-04
+
+### Инцидент: баги Impulse на живом XAU + фикс (защита невиновна)
+
+- Пользователь: «после установки новой версии — фантомные сделки, неработающие SL, не закрытие по кнопке; нужно чтобы работало с защитой». Доказательная диагностика по живым логам (`%APPDATA%\Aura\logs`): Grid здоров, баги только в Impulse. git blame: order-execution код не менялся с checkpoint `461904b` → **защита (Фаза 2/6) и perf-рефакторинг невиновны**, баги латентные в Impulse на волатильном XAU (DooTechnology).
+- 3 бага (коммит `62694f3`, PR #36): **Bug B** MARKET_CLOSED (10018 ×9783) ретраился 3×0.2с → заморозка loop → «окно не отвечает/кнопка не закрывает»; убран из `_RETRYABLE`. **Bug A** initial SL 10016 «Invalid stops» → state расходился с брокером; держим state = фактический SL. **Bug C** сервер отвергал telemetry `mode="IMPULSE"` (Literal+String(5)) → дроп; ModeName+=IMPULSE, String(16), миграция 0007.
+- Попутно: регрессия моей Фазы 6 (JWT floor 8→32 валил integration-тесты через короткий ключ в `tests/integration/conftest.py`) — исправлено. Verify: bot 1328 passed, server 237 passed.
+- Создано: запись в [[auragrid-incidents-log]] (2026-06-04, с Prevention), journal `2026-06-04.md`, auto-memory. **Order-execution фиксы требуют demo-валидации** (fake-MT5 не воспроизводит брокер).
+
 ## 2026-05-30
 
 ### Реализация защиты Ф2 + Ф6 (ветка protect/anti-piracy, PR #36)
