@@ -2,8 +2,15 @@
 type: moc
 tags: [auragrid, project, trading-bot, mql5-port]
 created: 2026-05-22
-updated: 2026-05-30
+updated: 2026-06-04
 ---
+
+> **🚩 СОСТОЯНИЕ РЕЛИЗА 2026-06-04 (handoff, читать первым).** Подготовка к первой продаже.
+> **Продаваемая сборка = ветка `fix/shelve-perf-restore-stability` (PR #37)** — MSI собирать ТОЛЬКО с неё. Содержит: ребренд Aura + защита (Фаза 2 strip `.py`→`.pyc` + Фаза 6 server-hardening) + Impulse-фиксы + откат perf.
+> Топология (ничего НЕ в `main`): `461904b` (baseline) → `rebrand/aura` → `protect/anti-piracy` (PR #36) → `fix/shelve-perf-restore-stability` (PR #37).
+> **Сделано:** защита Ф2/Ф6 ([[auragrid-protection-strategy]]); Impulse-фиксы + откат perf (2 инцидента 2026-06-04, [[auragrid-incidents-log]]). bot 1309 / server 237 passed.
+> **ОТКРЫТО:** 🔴 demo-валидация пересобранного MSI (fake-MT5 не ловит брокер); Ф1 подпись + Ф3 PyArmor — отложены (procurement). perf-ускорение откачено ([[auragrid-performance-strategy]]) → исходный лаг на волатильном рынке вернётся.
+> **Дважды доказано: защита НЕВИНОВНА в торговых багах** (git blame). Уроки — в incidents-log Prevention.
 
 > **TL;DR 2026-05-30 (защита):** добавлена [[auragrid-protection-strategy]] — план защиты ПО перед первой продажей (status proposed). Главная дыра: `bot/*.py` в MSI открытым текстом → кража IP + тривиальный взлом лицензии. Ворота продажи = подпись MSI + strip `.py` + PyArmor с привязкой к лицензии.
 

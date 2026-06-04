@@ -4,6 +4,8 @@
 
 **Текущий рабочий проект:** AuraGrid (торговый бот MT5). Точка входа — [[auragrid]].
 
+> **🚩 Handoff 2026-06-04:** подготовка к первой продаже. Продаваемая сборка = ветка `fix/shelve-perf-restore-stability` (PR #37). Состояние релиза + открытые шаги — в баннере [[auragrid]] MOC и [[auragrid-incidents-log]] (2 инцидента 2026-06-04). Открыто: demo-валидация MSI, Ф1 подпись + Ф3 PyArmor (procurement).
+
 **Обязательный workflow:** [[runbook-vault-integration]] — vault как первая и последняя фаза каждой задачи.
 
 ---
