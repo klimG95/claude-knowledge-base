@@ -30,6 +30,7 @@
 - [[auragrid-trading-core]] — торговое ядро (engine/protection/profit_trailing/risk)
 - [[auragrid-trading-settings]] — каталог торговых настроек пресета (36 параметров + валидации + UI)
 - [[auragrid-impulse-strategy]] — концепция новой стратегии `AuraImpulse` (отдельный preset-type, single-shot breakout, 13 полей)
+- [[stacybot-impuls-strategy]] — восстановленная сторонняя стратегия StacyBot-Impuls (трендовый trailing-scalper XAUUSD M30, EMA9); реверс завершён + оценка качества (3/5, хрупкая negative-skew); проект-источник 🗄️ архив, кандидат на внедрение в Aura
 - [[auragrid-analytics-module]] — второй python-процесс (indicators/regime/levels/calendar/preset-eval); unblock 2026-05-22 + TZ_ANALYTICS_INTEGRITY 2026-05-26 закрыты, данные корректны
 
 ### Операционные знания AuraGrid
@@ -54,6 +55,7 @@
 - [[adr-002-trail-rework-mq5-parity-departure]] — Намеренный отход от MQL5-эталона в логике трейлинга, удаление `pending_order_offset`, config_version 1→2 (2026-05-25, accepted)
 - [[adr-003-impulse-strategy-new-preset-type]] — Импульсная стратегия как отдельный preset-type (`strategy_type: "auraimpulse"`), backward-compat default `"auragrid"` (2026-05-25, accepted)
 - [[adr-004-impulse-adaptive-distance]] — AuraImpulse адаптивная дистанция pending'а: `first_step` → `candle_count` + `distance_coefficient` (M1 high-low), cooldown floor, config_version 2→3 (2026-05-28, accepted)
+- [[adr-005-largest-lot-first-ordering]] — обслуживание корзины (SL/закрытие) по убыванию лота — нивелирует риск от медленного последовательного `order_send`; границы ускорения order-execution (2026-06-04, accepted)
 
 ## Источники
 

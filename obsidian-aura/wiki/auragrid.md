@@ -2,7 +2,7 @@
 type: moc
 tags: [auragrid, project, trading-bot, mql5-port]
 created: 2026-05-22
-updated: 2026-06-04
+updated: 2026-06-14
 ---
 
 > **🚩 СОСТОЯНИЕ РЕЛИЗА 2026-06-04 (handoff, читать первым).** Подготовка к первой продаже.
@@ -47,6 +47,7 @@ updated: 2026-06-04
 - [[auragrid-trading-core]] — детали торгового ядра (engine/protection/profit_trailing)
 - [[auragrid-trading-settings]] — полный каталог настроек пресета (general/scalping/CG/mt5)
 - [[auragrid-impulse-strategy]] — концепция новой стратегии `AuraImpulse` (отдельный preset-type, single-shot breakout)
+- [[stacybot-impuls-strategy]] — восстановленная сторонняя стратегия StacyBot-Impuls (трендовый trailing-scalper, EMA9) — кандидат на внедрение в Aura
 - [[adr-003-impulse-strategy-new-preset-type]] — архитектурное решение об отдельном `strategy_type`
 - [[auragrid-msi-uninstall-cleanup]] — деинсталляция MSI с опциональной очисткой `%APPDATA%\GridScalp\` (in-app галочка)
 - [[auragrid-performance-strategy]] — стратегия ускорения (зависания/лаги на ультраволатильном рынке): 2 фронта + 5 ярусов
