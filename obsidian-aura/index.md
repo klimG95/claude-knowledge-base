@@ -30,7 +30,7 @@
 - [[auragrid-trading-core]] — торговое ядро (engine/protection/profit_trailing/risk)
 - [[auragrid-trading-settings]] — каталог торговых настроек пресета (36 параметров + валидации + UI)
 - [[auragrid-impulse-strategy]] — концепция новой стратегии `AuraImpulse` (отдельный preset-type, single-shot breakout, 13 полей)
-- [[stacybot-impuls-strategy]] — восстановленная сторонняя стратегия StacyBot-Impuls (трендовый trailing-scalper XAUUSD M30, EMA9); реверс завершён + оценка качества (3/5, хрупкая negative-skew); проект-источник 🗄️ архив, кандидат на внедрение в Aura
+- [[stacybot-impuls-strategy]] — StacyBot-Impuls (trailing-scalper XAUUSD M30); 🚩 **HANDOFF 2026-06-15** (секция в начале страницы = полный контекст+ТЗ для нового чата). Риск-% сайзинг (v3) = выживание; трейл откалиброван (v6); продажные pro-25/pro-20; следующий шаг — перенос трейла v6 в продакшн
 - [[auragrid-analytics-module]] — второй python-процесс (indicators/regime/levels/calendar/preset-eval); unblock 2026-05-22 + TZ_ANALYTICS_INTEGRITY 2026-05-26 закрыты, данные корректны
 
 ### Операционные знания AuraGrid
