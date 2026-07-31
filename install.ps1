@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Installer для claude-knowledge-base.
 
@@ -20,11 +20,15 @@
     Автоматически скопировать auto-memory шаблоны без интерактивного prompt'а.
     Без флага — installer спросит (default: No).
 
+.PARAMETER CopySettings
+    Развернуть базовый профиль разрешений в <InstallDir>\.claude\settings.json.
+    Убирает большую часть подтверждений. Состав и границы — claude-settings\README.md.
+
 .EXAMPLE
     .\install.ps1 -InstallDir .
 
 .EXAMPLE
-    .\install.ps1 -InstallDir "C:\projects\kb" -Force -CopyMemory
+    .\install.ps1 -InstallDir "C:\projects\kb" -Force -CopyMemory -CopySettings
 #>
 
 [CmdletBinding()]
@@ -32,7 +36,8 @@ param(
     [string]$InstallDir = ".",
     [switch]$Force,
     [switch]$SkipSymlink,
-    [switch]$CopyMemory
+    [switch]$CopyMemory,
+    [switch]$CopySettings
 )
 
 $ErrorActionPreference = "Stop"
@@ -243,6 +248,53 @@ if (-not (Test-Path $autoMemSrc)) {
         }
     } else {
         Write-Info "Auto-memory пропущен. Можно сделать вручную позже (см. INSTALL.md шаг 5)."
+    }
+}
+
+# --- Базовый профиль разрешений ----------------------------------------------
+
+$settingsSrc = Join-Path $InstallDir "claude-settings\settings.json.example"
+if (-not (Test-Path $settingsSrc)) {
+    Write-Warn2 "Файл claude-settings\settings.json.example отсутствует — этот шаг пропущен."
+} else {
+    Write-Host ""
+    $doSettings = if ($CopySettings) {
+        $true
+    } else {
+        Ask-YesNo -Question "Развернуть базовый профиль разрешений в .claude\settings.json?" -Default $false
+    }
+
+    if ($doSettings) {
+        $claudeDir    = Join-Path $InstallDir ".claude"
+        $settingsDest = Join-Path $claudeDir "settings.json"
+
+        if (-not (Test-Path $claudeDir)) {
+            try {
+                New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
+                Write-OK "Создана папка $claudeDir"
+            } catch {
+                Write-Fail "Не удалось создать $claudeDir : $($_.Exception.Message)"
+                $settingsDest = $null
+            }
+        }
+
+        if ($settingsDest) {
+            if ((Test-Path $settingsDest) -and -not $Force) {
+                Write-Warn2 ".claude\settings.json уже существует — не трогаю (используй -Force для перезаписи)."
+                Write-Info "Слить вручную: правила из claude-settings\settings.json.example в секцию permissions.allow."
+            } else {
+                try {
+                    Copy-Item -Path $settingsSrc -Destination $settingsDest -Force
+                    Write-OK "Профиль разрешений развёрнут: $settingsDest"
+                    Write-Warn2 "Профиль включает defaultMode=acceptEdits — правки файлов применяются без спроса."
+                    Write-Info "Границы профиля и что дописать под проект — claude-settings\README.md."
+                } catch {
+                    Write-Fail "Не удалось скопировать профиль: $($_.Exception.Message)"
+                }
+            }
+        }
+    } else {
+        Write-Info "Профиль разрешений пропущен. Развернуть позже: -CopySettings (см. INSTALL.md шаг 6)."
     }
 }
 

@@ -66,12 +66,17 @@ claude-knowledge-base/
 │               template-contract.md, template-domain-hub.md,
 │               template-inventory.md
 │
-├── auto-memory-templates/                                  ← 5 .example файлов + README
+├── auto-memory-templates/                                  ← 6 .example файлов + README
+│
+├── claude-settings/                                        ← базовый профиль разрешений
+│   ├── settings.json.example                               ← → .claude/settings.json
+│   └── README.md                                           ← что можно и чего нельзя в allow
 │
 └── docs/
     ├── concepts.md          ← 3 слоя памяти, ADR, MOC, inventory, domain-hub
     ├── workflows.md         ← типичные сценарии
     ├── customization.md     ← кастомизация vault под проект
+    ├── permissions.md       ← как убрать подтверждения, ничего не открыв лишнего
     └── troubleshooting.md
 ```
 
@@ -85,10 +90,10 @@ git clone https://github.com/klimG95/claude-knowledge-base.git
 cd claude-knowledge-base
 
 # Install (Windows PowerShell)
-.\install.ps1 -CopyMemory
+.\install.ps1 -CopyMemory -CopySettings
 
 # Install (macOS / Linux)
-./install.sh --copy-memory
+./install.sh --copy-memory --copy-settings
 
 # Запустить Claude в этой папке
 claude
@@ -98,6 +103,8 @@ claude
 ```
 
 Флаг `-CopyMemory` / `--copy-memory` копирует `.example`-файлы из `auto-memory-templates/` в `~/.claude/projects/<encoded-path>/memory/` с автоматической генерацией encoded-пути — ручное кодирование пути не нужно.
+
+Флаг `-CopySettings` / `--copy-settings` разворачивает базовый профиль разрешений в `.claude/settings.json`: правки файлов перестают спрашивать подтверждение, read-only командлеты разрешены. Профиль намеренно узкий — что в нём есть и чего в нём не будет никогда, см. [claude-settings/README.md](claude-settings/README.md).
 
 После bootstrap-сессии vault настроен под твой проект: создан project-specific MOC, обновлён `AGENTS.md`, проставлены auto-memory указатели. Дальше — обычная работа.
 
@@ -111,6 +118,7 @@ claude
 - **ADR пережил много переписываний кода — это фича, не баг.** Решение фиксируется в vault на уровне контекста и trade-off'ов, а не на уровне сигнатур функций.
 - **Один файл — один агент.** При параллельной работе агентам выдаются непересекающиеся файлы. Reviewer-pass объединяет.
 - **TL;DR в первых строках.** Любая страница должна быть полезна агенту даже при чтении первых 10 строк.
+- **Против подтверждений сначала меняй инструмент, а не права.** Read/Grep/Glob не спрашивают вообще; правило в `settings.json` сопоставляется по префиксу строки и не разбирает флаги, поэтому широкое правило открывает больше, чем кажется. Подробно — [docs/permissions.md](docs/permissions.md).
 
 ## Versioning
 
@@ -133,4 +141,6 @@ MIT — см. [LICENSE](LICENSE). Copyright 2026 klimG95.
 - [docs/concepts.md](docs/concepts.md) — концепции методологии
 - [docs/workflows.md](docs/workflows.md) — типичные сценарии
 - [docs/customization.md](docs/customization.md) — кастомизация под проект
+- [docs/permissions.md](docs/permissions.md) — подтверждения: замер, безопасные правила, что нельзя
+- [claude-settings/README.md](claude-settings/README.md) — базовый профиль разрешений
 - [docs/troubleshooting.md](docs/troubleshooting.md) — частые проблемы

@@ -38,6 +38,7 @@ cd <install-dir>
 | `-Force` | Перезаписать существующий symlink/копию `AGENTS.md` без вопросов |
 | `-SkipSymlink` | Не создавать symlink (полезно для тестов) |
 | `-CopyMemory` | Авто-копирование `.example`-шаблонов в encoded auto-memory путь |
+| `-CopySettings` | Развернуть базовый профиль разрешений в `.claude/settings.json` |
 | `-Verbose` | Подробный вывод |
 
 Что делает installer:
@@ -47,6 +48,7 @@ cd <install-dir>
 3. Проверяет git-статус папки. Если не git-репо — info про то, что обновления через `git pull` недоступны.
 4. Ищет Obsidian на диске — для подсказки, где открыть vault.
 5. Опц. предлагает скопировать `.example`-шаблоны auto-memory в `~/.claude/projects/.../memory/`.
+6. Опц. разворачивает базовый профиль разрешений в `<InstallDir>/.claude/settings.json`. Существующий файл не трогает без `-Force`.
 
 ### 3. Установка (macOS/Linux)
 
@@ -63,6 +65,7 @@ chmod +x install.sh
 | `--force` | Перезаписать существующий symlink/копию `AGENTS.md` без вопросов |
 | `--skip-symlink` | Не создавать symlink (полезно для тестов) |
 | `--copy-memory` | Авто-копирование `.example`-шаблонов в encoded auto-memory путь |
+| `--copy-settings` | Развернуть базовый профиль разрешений в `.claude/settings.json` |
 | `--verbose` | Подробный вывод |
 
 Дальше шаги идентичны Windows-варианту.
@@ -86,7 +89,25 @@ Vault использует Dataview для динамических индекс
 - Или сам: путь генерируется как `~/.claude/projects/c--<encoded-install-path>/memory/`. Encoded-path = lowercase install-path с заменой `\`, `/`, `:` на `-` (для Windows — с префиксом `c--` после drive letter).
 - Полные правила формата — в `auto-memory-templates/README.md`.
 
-### 6. Первая сессия Claude
+### 6. Профиль разрешений (если не было `--copy-settings`)
+
+Профиль убирает большую часть подтверждений, которые агент собирает за сессию. Развернуть позже:
+
+```powershell
+.\install.ps1 -CopySettings          # Windows
+./install.sh --copy-settings         # macOS / Linux
+```
+
+Результат — `<install-dir>/.claude/settings.json`. Если файл уже есть, инсталлятор его не трогает: слей правила вручную из `claude-settings/settings.json.example` в секцию `permissions.allow`.
+
+Что включено:
+
+- `defaultMode: acceptEdits` — правки файлов применяются без подтверждения. Обычно это самый крупный источник подтверждений; shell-команды продолжают спрашивать. Если на bootstrap-сессии (Q4) выбран режим «с подтверждением» — удали эту строку.
+- Read-only командлеты PowerShell и запуск `smoke-test.ps1`.
+
+Под свой проект дописываются read-only каталоги в `deny` и точные правила на скрипты проверок. Границы профиля и список того, что нельзя добавлять никогда, — [claude-settings/README.md](claude-settings/README.md). Методика замера — [docs/permissions.md](docs/permissions.md).
+
+### 7. Первая сессия Claude
 
 В корне `<install-dir>` запусти:
 
@@ -118,13 +139,17 @@ Claude задаст 4 вопроса (язык общения, имя/scope пр
 Ожидаемый вывод — все проверки `[OK]`:
 
 ```
-[OK]   obsidian-aura/AGENTS.md exists
-[OK]   AGENTS.md symlink/copy present
-[OK]   wiki/templates/ contains 9 files
-[OK]   BOOTSTRAP.md readable
-[OK]   AGENT-MANUAL.md readable
-[OK]   VERSION = 0.1.0
+[OK  ] obsidian-aura/AGENTS.md
+[OK  ] AGENTS.md root link — type: SymbolicLink
+[OK  ] templates/template-adr.md            (и остальные 8)
+[OK  ] VERSION semver — 0.3.0
+[OK  ] settings.json.example — валидный JSON
+[OK  ] Профиль без опасных правил — 10 правил проверено
+[OK  ] install.ps1: UTF-8 BOM
+[OK  ] install.ps1: синтаксис
 ```
+
+Проверок 11 групп: структура, обязательные файлы, 9 шаблонов, symlink, VERSION, generalize-контроль, auto-memory, `docs/`, профиль разрешений, кодировка и синтаксис `.ps1`.
 
 Если есть `[FAIL]` — открой `docs/troubleshooting.md`, найди соответствующий пункт.
 
@@ -138,3 +163,5 @@ Claude задаст 4 вопроса (язык общения, имя/scope пр
 - **Auto-memory путь сгенерировался неправильно** — задать вручную через `-InstallDir <path>` (PowerShell) или `--install-dir <path>` (bash) при повторном запуске инсталлера с `-CopyMemory` / `--copy-memory`.
 - **Claude не видит AGENTS.md** — проверь, что symlink/копия в корне install-dir, а не в `obsidian-aura/`.
 - **`git pull` ругается на изменённые файлы** — методология обновлена, локальные правки в шаблонах конфликтуют. Создай свою ветку или используй `git stash`.
+- **`install.ps1` или `smoke-test.ps1` падает с «The string is missing the terminator»** — файл `.ps1` сохранён в UTF-8 без BOM, а Windows PowerShell 5.1 читает его как ANSI. Пересохрани как **UTF-8 with BOM**; `smoke-test.ps1` проверяет это сам (группа «Кодировка .ps1»).
+- **Claude всё равно спрашивает подтверждение на каждую команду** — профиль разрешений не развёрнут (`-CopySettings`) либо команда идёт в форме, которую правило не покрывает. См. [docs/permissions.md](docs/permissions.md).

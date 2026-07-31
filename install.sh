@@ -14,6 +14,8 @@
 #       --skip-symlink         Не создавать корневой AGENTS.md
 #       --copy-memory          Автоматически копировать auto-memory шаблоны
 #                              (без интерактивного prompt'а)
+#       --copy-settings        Развернуть базовый профиль разрешений в
+#                              <install-dir>/.claude/settings.json
 #   -v, --verbose              Подробный вывод
 #   -h, --help                 Показать help
 
@@ -42,13 +44,14 @@ log_verbose() { [[ "$VERBOSE" == "1" ]] && printf '%s[VERB]%s %s\n' "$C_CYAN" "$
 INSTALL_DIR="."
 FORCE=0
 SKIP_SYMLINK=0
-COPY_MEMORY="ask"   # ask | yes | no
+COPY_MEMORY="ask"     # ask | yes | no
+COPY_SETTINGS="ask"   # ask | yes | no
 VERBOSE=0
 
 # --- Usage ------------------------------------------------------------------
 
 usage() {
-    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -70,6 +73,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --copy-memory)
             COPY_MEMORY="yes"
+            shift
+            ;;
+        --copy-settings)
+            COPY_SETTINGS="yes"
             shift
             ;;
         -v|--verbose)
@@ -282,6 +289,54 @@ else
         fi
     else
         log_info "Auto-memory пропущен. Можно сделать вручную позже."
+    fi
+fi
+
+# --- Базовый профиль разрешений ---------------------------------------------
+
+SETTINGS_SRC="$INSTALL_DIR/claude-settings/settings.json.example"
+
+if [[ ! -f "$SETTINGS_SRC" ]]; then
+    log_warn "Файл claude-settings/settings.json.example отсутствует — этот шаг пропущен."
+else
+    do_settings=0
+    case "$COPY_SETTINGS" in
+        yes) do_settings=1 ;;
+        no)  do_settings=0 ;;
+        ask)
+            echo ""
+            if [[ -t 0 ]]; then
+                printf '%sРазвернуть базовый профиль разрешений в .claude/settings.json?%s [y/N] ' "$C_CYAN" "$C_RESET"
+                read -r answer || answer=""
+                case "$answer" in
+                    y|Y|yes|YES) do_settings=1 ;;
+                    *) do_settings=0 ;;
+                esac
+            else
+                log_info "Не интерактивный режим — профиль разрешений пропущен (используй --copy-settings)."
+                do_settings=0
+            fi
+            ;;
+    esac
+
+    if [[ "$do_settings" == "1" ]]; then
+        CLAUDE_DIR="$INSTALL_DIR/.claude"
+        SETTINGS_DEST="$CLAUDE_DIR/settings.json"
+
+        if ! mkdir -p "$CLAUDE_DIR"; then
+            log_fail "Не удалось создать $CLAUDE_DIR"
+        elif [[ -e "$SETTINGS_DEST" && "$FORCE" != "1" ]]; then
+            log_warn ".claude/settings.json уже существует — не трогаю (используй --force для перезаписи)."
+            log_info "Слить вручную: правила из claude-settings/settings.json.example в секцию permissions.allow."
+        elif cp "$SETTINGS_SRC" "$SETTINGS_DEST"; then
+            log_ok "Профиль разрешений развёрнут: $SETTINGS_DEST"
+            log_warn "Профиль включает defaultMode=acceptEdits — правки файлов применяются без спроса."
+            log_info "Границы профиля и что дописать под проект — claude-settings/README.md."
+        else
+            log_fail "Не удалось скопировать профиль разрешений."
+        fi
+    else
+        log_info "Профиль разрешений пропущен. Развернуть позже: --copy-settings (см. INSTALL.md шаг 6)."
     fi
 fi
 

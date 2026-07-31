@@ -17,6 +17,7 @@
 - [[methodology-overview]] — общая методология «второго мозга»
 - [[runbook-session-start]] — чек-лист начала сессии
 - [[runbook-session-handoff]] — чек-лист завершения сессии
+- [[runbook-permission-audit]] — аудит подтверждений: замер, смена инструмента, узкие правила
 - [[runbook-vault-integration]] — vault как обязательный workflow проекта
 
 ## Сущности

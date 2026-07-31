@@ -17,3 +17,7 @@ node_modules/
 # Local user-specific
 auto-memory/
 .claude-memory/
+
+# Личные переопределения разрешений — не коммитятся.
+# .claude/settings.json НЕ игнорируется намеренно: это общий для команды профиль.
+.claude/settings.local.json

@@ -1,4 +1,4 @@
-# smoke-test.ps1 — верификация установки claude-knowledge-base
+﻿# smoke-test.ps1 — верификация установки claude-knowledge-base
 #
 # Проверяет целостность распакованного пакета: структура папок, обязательные файлы,
 # отсутствие hardcoded имён реального проекта, формат VERSION, состояние auto-memory.
@@ -71,6 +71,7 @@ Test-RequiredPath -Path (Join-Path $InstallDir 'obsidian-aura/raw')             
 Test-RequiredPath -Path (Join-Path $InstallDir 'obsidian-aura/journal')         -Label 'obsidian-aura/journal/'         -Directory
 Test-RequiredPath -Path (Join-Path $InstallDir 'auto-memory-templates')         -Label 'auto-memory-templates/'         -Directory
 Test-RequiredPath -Path (Join-Path $InstallDir 'docs')                          -Label 'docs/'                          -Directory
+Test-RequiredPath -Path (Join-Path $InstallDir 'claude-settings')               -Label 'claude-settings/'               -Directory
 
 # --- 2. Обязательные файлы ---
 Write-Host ""
@@ -200,6 +201,105 @@ Write-Host "-- docs/ --" -ForegroundColor Cyan
 Test-RequiredPath -Path (Join-Path $InstallDir 'docs/concepts.md')        -Label 'docs/concepts.md'
 Test-RequiredPath -Path (Join-Path $InstallDir 'docs/workflows.md')       -Label 'docs/workflows.md'
 Test-RequiredPath -Path (Join-Path $InstallDir 'docs/troubleshooting.md') -Label 'docs/troubleshooting.md'
+Test-RequiredPath -Path (Join-Path $InstallDir 'docs/permissions.md')     -Label 'docs/permissions.md'
+
+# --- 10. Профиль разрешений ---
+Write-Host ""
+Write-Host "-- Профиль разрешений --" -ForegroundColor Cyan
+
+# Правила, которые эквивалентны разрешению произвольного кода или снимают
+# проверку флагов. Ни одно из них не должно попасть в поставляемый профиль.
+$forbiddenRules = @(
+    'npm run:\*', 'yarn run:\*', 'pnpm run:\*', 'bun run:\*', 'make:\*', 'just:\*',
+    'node:\*', 'python3?:\*', 'ruby:\*', 'perl:\*', 'php:\*',
+    'npx:\*', 'bunx:\*', 'uvx:\*',
+    'bash:\*', 'sh:\*', 'zsh:\*', 'eval:\*', 'exec:\*', 'ssh:\*', 'sudo:\*',
+    'git log:\*', 'git diff:\*', 'git show:\*', 'git fetch:\*', 'git pull:\*',
+    'gh api:\*', 'curl:\*', 'wget:\*',
+    'docker run:\*', 'kubectl exec:\*'
+)
+
+$settingsExample = Join-Path $InstallDir 'claude-settings/settings.json.example'
+if (Test-Path -Path $settingsExample) {
+    Write-Check -Status 'OK' -Name 'claude-settings/settings.json.example'
+
+    $raw = Get-Content -Path $settingsExample -Raw
+    $parsed = $null
+    try { $parsed = $raw | ConvertFrom-Json } catch {
+        Write-Check -Status 'FAIL' -Name 'settings.json.example — валидный JSON' -Detail $_.Exception.Message
+    }
+
+    if ($parsed) {
+        Write-Check -Status 'OK' -Name 'settings.json.example — валидный JSON'
+
+        $allow = @($parsed.permissions.allow)
+        $badHit = $false
+        foreach ($rule in $allow) {
+            foreach ($pat in $forbiddenRules) {
+                if ($rule -match $pat) {
+                    Write-Check -Status 'FAIL' -Name "Опасное правило в профиле: $rule" -Detail 'произвольный код или снятая проверка флагов'
+                    $badHit = $true
+                }
+            }
+            if ($rule -match '[|>]' -or $rule -match '\s-c\s\S+=' ) {
+                Write-Check -Status 'FAIL' -Name "Правило с пайпом/редиректом/-c: $rule"
+                $badHit = $true
+            }
+        }
+        if (-not $badHit) {
+            Write-Check -Status 'OK' -Name 'Профиль без опасных правил' -Detail "$($allow.Count) правил проверено"
+        }
+    }
+} else {
+    Write-Check -Status 'FAIL' -Name 'claude-settings/settings.json.example' -Detail "missing: $settingsExample"
+}
+
+Test-RequiredPath -Path (Join-Path $InstallDir 'claude-settings/README.md') -Label 'claude-settings/README.md'
+
+# Развёрнутый профиль — опционален, но если есть, должен парситься
+$deployed = Join-Path $InstallDir '.claude/settings.json'
+if (Test-Path -Path $deployed) {
+    try {
+        $null = (Get-Content -Path $deployed -Raw | ConvertFrom-Json)
+        Write-Check -Status 'OK' -Name '.claude/settings.json развёрнут и валиден'
+    } catch {
+        Write-Check -Status 'FAIL' -Name '.claude/settings.json — невалидный JSON' -Detail $_.Exception.Message
+    }
+} else {
+    Write-Check -Status 'WARN' -Name '.claude/settings.json не развёрнут' -Detail 'запусти install.ps1 -CopySettings, если нужны меньшие подтверждения'
+}
+
+# --- 11. Кодировка .ps1 ---
+# Windows PowerShell 5.1 читает .ps1 как ANSI, если нет BOM. Тогда UTF-8 текст
+# ломается: длинное тире превращается в последовательность, где второй символ —
+# типографская кавычка, а её парсер считает закрывающей кавычкой строки.
+# Скрипт с русским текстом без BOM просто не запустится.
+Write-Host ""
+Write-Host "-- Кодировка .ps1 --" -ForegroundColor Cyan
+$psFiles = Get-ChildItem -Path $InstallDir -Filter '*.ps1' -File -ErrorAction SilentlyContinue
+foreach ($ps in $psFiles) {
+    $head = [System.IO.File]::ReadAllBytes($ps.FullName) | Select-Object -First 3
+    $hasBom = ($head.Count -ge 3 -and $head[0] -eq 239 -and $head[1] -eq 187 -and $head[2] -eq 191)
+
+    $raw = [System.IO.File]::ReadAllText($ps.FullName, [System.Text.UTF8Encoding]::new($false))
+    $risky = [regex]::Matches($raw, '[—–“”‘’]').Count
+
+    if ($hasBom) {
+        Write-Check -Status 'OK' -Name "$($ps.Name): UTF-8 BOM"
+    } elseif ($risky -gt 0) {
+        Write-Check -Status 'FAIL' -Name "$($ps.Name): нет BOM при $risky не-ASCII символах" -Detail 'не запустится на PowerShell 5.1 — пересохрани как UTF-8 with BOM'
+    } else {
+        Write-Check -Status 'WARN' -Name "$($ps.Name): нет BOM" -Detail 'пока ASCII-only, но добавь BOM перед вводом не-ASCII текста'
+    }
+
+    $errs = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($ps.FullName, [ref]$null, [ref]$errs)
+    if ($errs -and $errs.Count -gt 0) {
+        Write-Check -Status 'FAIL' -Name "$($ps.Name): синтаксис" -Detail "$($errs.Count) ошибок, первая — строка $($errs[0].Extent.StartLineNumber)"
+    } else {
+        Write-Check -Status 'OK' -Name "$($ps.Name): синтаксис"
+    }
+}
 
 # --- Финальный отчёт ---
 Write-Host ""

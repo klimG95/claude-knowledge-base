@@ -8,6 +8,29 @@
 
 (Здесь накапливаются изменения в `main`, до выкатки следующей версии.)
 
+## [0.3.0] — 2026-07-31
+
+Тема релиза — подтверждения: как сократить их число, не расширив права. Плюс починка двух скриптов, которые не запускались на Windows PowerShell 5.1.
+
+### Added
+- `claude-settings/` — базовый профиль разрешений: `settings.json.example` (разворачивается в `.claude/settings.json`) и `README.md` с границами профиля и списком того, что нельзя добавлять в `allow` никогда.
+- `docs/permissions.md` — методика: почему правила помогают меньше, чем кажется; порядок «сменить инструмент → стандартизировать форму → узкое правило»; таблица можно/нельзя; готовый скрипт замера транскриптов; две ловушки замера на Windows.
+- `obsidian-aura/wiki/runbook-permission-audit.md` — процедура аудита подтверждений (Prerequisites / Procedure / Verification / What NOT to do / Rollback).
+- `auto-memory-templates/feedback_tool_choice_over_shell.md.example` — поведенческое правило: Read/Grep/Glob вместо shell, git через Bash, канонические формы запуска.
+- `install.ps1` / `install.sh` — флаг `-CopySettings` / `--copy-settings`: разворачивает профиль в `<install-dir>/.claude/settings.json`, существующий файл без `-Force` не трогает.
+- `smoke-test.ps1` — две новые группы проверок: контроль опасных правил в поставляемом профиле (wildcard на интерпретаторы, раннеры, `git log`, `gh api`, `curl`; правила с пайпом или редиректом) и контроль кодировки/синтаксиса всех `.ps1`.
+- `AGENT-MANUAL.md` §5.8 «Аудит подтверждений» + строка в таблице триггеров §3.1.
+- `docs/troubleshooting.md` — два раздела: «`.ps1` не запускается: The string is missing the terminator» и «Claude спрашивает подтверждение почти на каждую команду».
+
+### Fixed
+- **`install.ps1` и `smoke-test.ps1` не запускались на Windows PowerShell 5.1.** Файлы были сохранены в UTF-8 без BOM, PowerShell 5.1 читает `.ps1` как ANSI, и длинное тире превращалось в последовательность с типографской кавычкой `”`, которую парсер считает закрывающей кавычкой строки. `smoke-test.ps1` падал с 18 ошибками разбора, `install.ps1` — с одной. Оба пересохранены как UTF-8 with BOM; регресс закрыт проверкой в самом smoke-test.
+- `install.sh`: диапазон `sed` в `usage()` захватывал строку `set -euo pipefail` и печатал её в help.
+
+### Changed
+- `README.md`: `claude-settings/` в структуре пакета, `-CopySettings` в quick start, новый принцип «против подтверждений сначала меняй инструмент, а не права».
+- `INSTALL.md`: новый шаг 6 «Профиль разрешений» (первая сессия Claude стала шагом 7), флаги в обеих таблицах параметров, актуализирован ожидаемый вывод smoke-test.
+- `VERSION`: 0.2.0 → 0.3.0.
+
 ## [0.2.0] — 2026-05-21
 
 ### Added
@@ -44,6 +67,7 @@
 ### Notes
 - Initial release. Методология основана на реальном предрелизном проекте.
 
-[Unreleased]: https://github.com/klimG95/claude-knowledge-base/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/klimG95/claude-knowledge-base/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/klimG95/claude-knowledge-base/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/klimG95/claude-knowledge-base/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/klimG95/claude-knowledge-base/releases/tag/v0.1.0
